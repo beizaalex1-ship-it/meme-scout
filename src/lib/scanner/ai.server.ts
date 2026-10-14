@@ -1,0 +1,87 @@
+import { createOpenAI } from "@ai-sdk/openai";
+import { NoObjectGeneratedError, Output, streamText } from "ai";
+import { z } from "zod";
+
+const MODEL = "openai/gpt-6-astra";
+
+export const aiSchema = z.object({
+  social: z.object({
+    score: z.number().int().min(1).max(10),
+    hype: z.enum(["organic", "automated", "unclear"]),
+    summary: z.string().describe("Exactly 2 sentences on the prevailing narrative."),
+  }),
+  opportunity: z.object({
+    score: z.number().int().min(1).max(100),
+    bullCase: z.string(),
+    bearCase: z.string(),
+  }),
+  chief: z.object({
+    bullets: z.array(z.string()).describe("3 short bullets: market momentum, social sentiment, wallet health"),
+    takeaway: z.string().describe("One-line final verdict / actionable takeaway"),
+  }),
+});
+export type AiReport = z.infer<typeof aiSchema>;
+
+export class AiGatewayError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+const INSTRUCTIONS = `You run three agents in a Solana Pump.fun meme-coin research pipeline. Use ONLY the evidence provided; never invent data.
+
+Agent 3 — Social Intelligence: from the token's name, description, listed website/X/Telegram links and DexScreener boost/profile status, judge narrative strength. Free sources only: no live X search is available, so missing socials lower the score and say "unclear" when you can't tell organic from automated. Score 1-10 and write a 2-sentence narrative summary.
+
+Agent 6 — Opportunity Analyst: weigh upside (market-cap room to grow, momentum, social) against downside (holder concentration, sell pressure, missing data, wash-trading flags). Give a Risk-Adjusted Score 1-100 (70+ only for genuinely strong setups) plus a brief bull case and bear case.
+
+Agent 7 — Chief Research Agent: write 3 punchy bullets (market momentum, social sentiment, wallet health) and a one-line final verdict for a Telegram alert. Not financial advice tone; be factual and concise.`;
+
+export async function runAiAgents(evidence: unknown): Promise<AiReport> {
+  const apiKey = process.env.LOVABLE_API_KEY;
+  if (!apiKey) throw new AiGatewayError(401, "LOVABLE_API_KEY is not configured");
+
+  let failStatus: number | null = null;
+  let failBody = "";
+  const provider = createOpenAI({
+    baseURL: "https://ai.gateway.lovable.dev/v1",
+    apiKey,
+    headers: { "Lovable-API-Key": apiKey, "X-Lovable-AIG-SDK": "vercel-ai-sdk" },
+    fetch: async (input, init) => {
+      const res = await fetch(input, init);
+      if (!res.ok) {
+        failStatus = res.status;
+        failBody = await res.clone().text();
+      }
+      return res;
+    },
+  });
+
+  const result = streamText({
+    model: provider.responses(MODEL),
+    system: INSTRUCTIONS,
+    prompt: `Evidence from agents 1, 2, 4 and 5:\n${JSON.stringify(evidence, null, 2)}`,
+    experimental_output: Output.object({ schema: aiSchema }),
+    providerOptions: {
+      openai: {
+        forceReasoning: true,
+        reasoningEffort: "low",
+        store: false,
+        include: ["reasoning.encrypted_content"],
+      },
+    },
+    onError: () => {},
+  });
+
+  try {
+    await result.consumeStream();
+    const out = await result.experimental_output;
+    return out;
+  } catch (e) {
+    if (failStatus) throw new AiGatewayError(failStatus, failBody.slice(0, 300));
+    if (NoObjectGeneratedError.isInstance(e)) throw new Error("AI returned an unreadable report");
+    throw e;
+  }
+}
