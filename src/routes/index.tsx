@@ -1,24 +1,167 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { queryOptions, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { getDashboard, resumeScanner, sendTestAlert } from "@/lib/scanner/scanner.functions";
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
-export const Route = createFileRoute("/")({
-  component: Index,
+const dashboardQuery = queryOptions({
+  queryKey: ["dashboard"],
+  queryFn: () => getDashboard(),
+  refetchInterval: 30_000,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Coin Hunter — Pump.fun Meme Coin Scanner" },
+      { name: "description", content: "Seven research agents scan graduating Pump.fun tokens, filter rugs and push alerts to Telegram." },
+      { property: "og:title", content: "Coin Hunter — Pump.fun Meme Coin Scanner" },
+      { property: "og:description", content: "Seven research agents scan graduating Pump.fun tokens, filter rugs and push alerts to Telegram." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+    ],
+  }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(dashboardQuery),
+  component: Dashboard,
+});
+
+type Token = Awaited<ReturnType<typeof getDashboard>>["tokens"][number];
+
+const statusStyle: Record<string, string> = {
+  alerted: "bg-primary text-primary-foreground",
+  passed: "bg-accent text-accent-foreground",
+  rejected: "bg-destructive text-destructive-foreground",
+  error: "bg-warning text-primary-foreground",
+  pending: "bg-muted text-muted-foreground",
+};
+
+function Dashboard() {
+  const { data } = useSuspenseQuery(dashboardQuery);
+  const qc = useQueryClient();
+  const router = useRouter();
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function test() {
+    setBusy(true);
+    setTestMsg(null);
+    const r = await sendTestAlert();
+    setTestMsg(r.ok ? "Test alert sent — check your Telegram channel." : `Failed: ${r.error}`);
+    setBusy(false);
+  }
+  async function resume() {
+    await resumeScanner();
+    await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    router.invalidate();
+  }
+
+  const counts = data.tokens.reduce<Record<string, number>>((a, t) => ((a[t.status] = (a[t.status] ?? 0) + 1), a), {});
+
   return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto max-w-5xl px-4 py-10">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-6">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-widest text-primary">Solana · Pump.fun · every 5 min</p>
+            <h1 className="mt-1 text-4xl font-bold">Coin Hunter</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              7-agent pipeline. Alerts fire at Opportunity Score 70+. Rugs are auto-rejected.
+            </p>
+          </div>
+          <button
+            onClick={test}
+            disabled={busy}
+            className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {busy ? "Sending…" : "Send test alert"}
+          </button>
+        </header>
+
+        {testMsg && <p className="mt-4 rounded-md border border-border bg-card p-3 font-mono text-sm">{testMsg}</p>}
+        {!data.chatIdSet && (
+          <p className="mt-4 rounded-md border border-warning p-3 text-sm text-warning">
+            Telegram channel ID is not set yet, so alerts can't be delivered.
+          </p>
+        )}
+        {data.state?.paused_reason && (
+          <div className="mt-4 flex items-center justify-between gap-4 rounded-md border border-destructive p-3 text-sm">
+            <span>Scanner paused: {data.state.paused_reason}</span>
+            <button onClick={resume} className="rounded bg-destructive px-3 py-1 text-destructive-foreground">
+              Resume
+            </button>
+          </div>
+        )}
+
+        <section className="mt-6 grid grid-cols-2 gap-3 font-mono sm:grid-cols-5">
+          <Stat label="Last run" value={data.state?.last_run_at ? new Date(data.state.last_run_at).toLocaleTimeString() : "never"} />
+          {["alerted", "passed", "rejected", "error"].map((s) => (
+            <Stat key={s} label={s} value={String(counts[s] ?? 0)} />
+          ))}
+        </section>
+        {data.state?.last_run_summary && (
+          <p className="mt-2 font-mono text-xs text-muted-foreground">{data.state.last_run_summary}</p>
+        )}
+
+        <section className="mt-8 space-y-3">
+          {data.tokens.length === 0 && (
+            <p className="rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
+              No tokens scanned yet. The first scan runs within 5 minutes.
+            </p>
+          )}
+          {data.tokens.map((t) => (
+            <TokenRow key={t.mint} t={t} />
+          ))}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="text-xs uppercase text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg">{value}</div>
     </div>
   );
 }
+
+function TokenRow({ t }: { t: Token }) {
+  const [open, setOpen] = useState(false);
+  const r = JSON.parse(t.reports) as Record<string, Record<string, unknown>>;
+  return (
+    <article className="rounded-md border border-border bg-card">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-3 p-4 text-left">
+        <span className={`rounded px-2 py-0.5 font-mono text-xs uppercase ${statusStyle[t.status] ?? ""}`}>{t.status}</span>
+        <span className="font-semibold">{t.name ?? "Unknown"}</span>
+        <span className="font-mono text-sm text-muted-foreground">${t.symbol}</span>
+        <span className="ml-auto font-mono text-lg text-primary">{t.score ?? "—"}</span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-border p-4 text-sm">
+          <p className="break-all font-mono text-xs text-muted-foreground">CA: {t.mint}</p>
+          {t.verdict && <p><b>Verdict:</b> {t.verdict}</p>}
+          {t.error && <p className="text-destructive">Error: {t.error}</p>}
+          {(["hunter", "market", "social", "wallet", "security", "opportunity", "chief"] as const).map(
+            (k) =>
+              r[k] && (
+                <details key={k} className="rounded border border-border p-2">
+                  <summary className="cursor-pointer font-mono text-xs uppercase text-primary">{agentName[k]}</summary>
+                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-xs">{JSON.stringify(r[k], null, 2)}</pre>
+                </details>
+              ),
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+const agentName = {
+  hunter: "1 · Coin Hunter",
+  market: "2 · Market Analyst",
+  social: "3 · Social Intelligence",
+  wallet: "4 · Wallet Investigator",
+  security: "5 · Security Analyst",
+  opportunity: "6 · Opportunity Analyst",
+  chief: "7 · Chief Research Agent",
+};

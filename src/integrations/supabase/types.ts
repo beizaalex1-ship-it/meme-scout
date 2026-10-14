@@ -14,13 +14,78 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      scanned_tokens: {
+        Row: {
+          alert_text: string | null
+          created_at: string
+          error: string | null
+          mint: string
+          name: string | null
+          reports: Json
+          score: number | null
+          status: string
+          symbol: string | null
+          updated_at: string
+          verdict: string | null
+        }
+        Insert: {
+          alert_text?: string | null
+          created_at?: string
+          error?: string | null
+          mint: string
+          name?: string | null
+          reports?: Json
+          score?: number | null
+          status?: string
+          symbol?: string | null
+          updated_at?: string
+          verdict?: string | null
+        }
+        Update: {
+          alert_text?: string | null
+          created_at?: string
+          error?: string | null
+          mint?: string
+          name?: string | null
+          reports?: Json
+          score?: number | null
+          status?: string
+          symbol?: string | null
+          updated_at?: string
+          verdict?: string | null
+        }
+        Relationships: []
+      }
+      scanner_state: {
+        Row: {
+          id: number
+          last_run_at: string | null
+          last_run_summary: string | null
+          lock_until: string | null
+          paused_reason: string | null
+        }
+        Insert: {
+          id?: number
+          last_run_at?: string | null
+          last_run_summary?: string | null
+          lock_until?: string | null
+          paused_reason?: string | null
+        }
+        Update: {
+          id?: number
+          last_run_at?: string | null
+          last_run_summary?: string | null
+          lock_until?: string | null
+          paused_reason?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      acquire_scanner_lock: { Args: { _seconds: number }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never
