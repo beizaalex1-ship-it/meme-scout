@@ -14,6 +14,7 @@ import {
   type CoinHunterReport,
 } from "./rules";
 import { sendTelegram } from "./telegram.server";
+import { investigateWallets } from "./forensics.server";
 
 const MAX_TOKENS_PER_RUN = 5;
 
@@ -81,7 +82,6 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
   if (!hunter.name) hunter.missing.push("Token Name");
   if (!hunter.symbol) hunter.missing.push("Ticker");
   if (!hunter.mintTimestamp) hunter.missing.push("Mint Timestamp");
-  hunter.missing.push("Developer Wallet (not exposed by free sources)");
 
   await db.from("scanned_tokens").upsert({ mint, name: hunter.name, symbol: hunter.symbol, status: "pending" });
 
@@ -105,8 +105,13 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
     const holderRes = mintRes.ok
       ? await fetchHolderPcts(mint, mintRes.info.supply, pair.pairAddress)
       : { ok: false as const, reason: "mint supply unknown" };
-    const wallet = holderRes.ok ? analyzeWallets(holderRes.holders) : analyzeWallets(null, holderRes.reason);
-    console.log(JSON.stringify({ evt: "token_checks", mint, security: security.verdict, holders: wallet.verified ? "verified" : "unverified" }));
+    const forensics = await investigateWallets(mint, mintRes.ok ? mintRes.info.supply : 0, [pair.pairAddress]);
+    if (forensics.creator.status === "VERIFIED") hunter.creatorWallet = forensics.creator.wallet;
+    else hunter.missing.push(`Developer Wallet (UNVERIFIED: ${forensics.creator.evidence})`);
+    const wallet = holderRes.ok
+      ? analyzeWallets(holderRes.holders, undefined, forensics)
+      : analyzeWallets(null, holderRes.reason, forensics);
+    console.log(JSON.stringify({ evt: "token_checks", mint, security: security.verdict, holders: wallet.verified ? "verified" : "unverified", forensics: forensics.status }));
     const socials = {
       description: description ?? null,
       websites: pair.info?.websites?.map((w) => w.url) ?? [],
