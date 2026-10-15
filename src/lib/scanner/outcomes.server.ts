@@ -23,7 +23,7 @@ export async function recordPrediction(input: PredictionInput) {
 }
 
 export function predictionMarket(pair: DexPair) {
-  return { ...marketPointFromPair(pair), txns: pair.txns };
+  return { ...marketPointFromPair(pair), txns: pair.txns ?? {} };
 }
 
 /** Records every due observation using free DexScreener data. Returns counts. */
