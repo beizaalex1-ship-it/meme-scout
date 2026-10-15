@@ -22,21 +22,24 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Newest Solana Pump.fun mints seen on DexScreener profile/boost feeds. */
-export async function discoverPumpMints(): Promise<{ mint: string; description: string | undefined }[]> {
-  const feeds = await Promise.allSettled([
-    getJson<TokenProfile[]>("https://api.dexscreener.com/token-profiles/latest/v1"),
-    getJson<TokenProfile[]>("https://api.dexscreener.com/token-boosts/latest/v1"),
-  ]);
-  const seen = new Map<string, string | undefined>();
-  for (const f of feeds) {
-    if (f.status !== "fulfilled" || !Array.isArray(f.value)) continue;
-    for (const t of f.value) {
-      if (t.chainId === "solana" && t.tokenAddress?.endsWith("pump") && !seen.has(t.tokenAddress))
-        seen.set(t.tokenAddress, t.description);
+/** Brand-new Pump.fun launches (GeckoTerminal new pools), newest first, within maxAgeMin. */
+export async function discoverPumpMints(maxAgeMin = 10): Promise<{ mint: string; description: string | undefined }[]> {
+  type Pool = { attributes: { pool_created_at: string }; relationships: { dex: { data: { id: string } }; base_token: { data: { id: string } } } };
+  const pages = await Promise.allSettled(
+    [1, 2, 3].map((p) => getJson<{ data: Pool[] }>(`https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=${p}`)),
+  );
+  const cutoff = Date.now() - maxAgeMin * 60_000;
+  const seen = new Set<string>();
+  for (const pg of pages) {
+    if (pg.status !== "fulfilled") continue;
+    for (const pool of pg.value.data ?? []) {
+      const mint = pool.relationships.base_token.data.id.replace(/^solana_/, "");
+      if (!pool.relationships.dex.data.id.startsWith("pump") || !mint.endsWith("pump")) continue;
+      if (Date.parse(pool.attributes.pool_created_at) < cutoff) continue;
+      seen.add(mint);
     }
   }
-  return [...seen].map(([mint, description]) => ({ mint, description }));
+  return [...seen].map((mint) => ({ mint, description: undefined }));
 }
 
 /** Best (highest-liquidity / pump) pair per mint. */

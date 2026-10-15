@@ -1,6 +1,7 @@
 // Deterministic agent logic (no AI). Shared by the scanner and tests.
 
-export const ALERT_MIN_SCORE = 70;
+export const ALERT_MIN_SCORE = 1; // every analyzed, non-rug token is sent
+export const MAX_LAUNCH_AGE_MIN = 10;
 export const INSIDER_RED_FLAG_PCT = 30;
 export const PUMP_GRADUATION_MCAP_USD = 69_000;
 
