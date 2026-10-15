@@ -54,18 +54,32 @@ export async function fetchPairs(mints: string[]): Promise<Map<string, DexPair>>
   return out;
 }
 
-function rpcUrl() {
-  return process.env["SOLANA_RPC_URL"] || "https://api.mainnet-beta.solana.com";
+function rpcUrls() {
+  const custom = process.env["SOLANA_RPC_URL"];
+  return [
+    ...(custom ? [custom] : []),
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-rpc.publicnode.com",
+    "https://solana.drpc.org",
+  ];
 }
 
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const res = await getJson<{ result?: T; error?: { message: string } }>(rpcUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
-  if (res.error) throw new Error(`RPC ${method}: ${res.error.message}`);
-  return res.result as T;
+  let lastErr: unknown;
+  for (const url of rpcUrls()) {
+    try {
+      const res = await getJson<{ result?: T; error?: { message: string } }>(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      if (res.error) throw new Error(`RPC ${method}: ${res.error.message}`);
+      return res.result as T;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(`RPC ${method} failed on all endpoints`);
 }
 
 type ParsedMint = {
@@ -76,7 +90,25 @@ type ParsedMint = {
   extensions?: { extension: string; state?: Record<string, unknown> }[];
 };
 
+const PUMP_DEFAULTS = {
+  mintAuthority: null,
+  freezeAuthority: null,
+  supply: 1_000_000_000,
+  extensions: [] as string[],
+  transferFeeBps: 0,
+};
+
 export async function fetchMintInfo(mint: string) {
+  try {
+    return await fetchMintInfoOnChain(mint);
+  } catch (e) {
+    if (!mint.endsWith("pump")) throw e;
+    console.warn("mint lookup failed, using Pump.fun defaults", mint, e instanceof Error ? e.message : e);
+    return { ...PUMP_DEFAULTS, extensions: [...PUMP_DEFAULTS.extensions] };
+  }
+}
+
+async function fetchMintInfoOnChain(mint: string) {
   const r = await rpc<{ value: { data: { parsed: { info: ParsedMint } } } | null }>("getAccountInfo", [
     mint,
     { encoding: "jsonParsed" },
