@@ -52,3 +52,15 @@ export const resumeScanner = createServerFn({ method: "POST" }).handler(async ()
   await supabaseAdmin.from("scanner_state").update({ paused_reason: null }).eq("id", 1);
   return { ok: true };
 });
+
+let lastManual = 0;
+export const scanNow = createServerFn({ method: "POST" }).handler(async () => {
+  if (Date.now() - lastManual < 30_000) return { ok: false, summary: "Please wait 30 seconds between manual scans." };
+  lastManual = Date.now();
+  try {
+    const { runScan } = await import("./run.server");
+    return { ok: true, summary: await runScan() };
+  } catch (e) {
+    return { ok: false, summary: e instanceof Error ? e.message : String(e) };
+  }
+});
