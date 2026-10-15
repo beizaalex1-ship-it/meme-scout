@@ -78,21 +78,50 @@ export function analyzeMarket(m: MarketInput): MarketReport {
 
 export type WalletReport = {
   top10Pct: number | null;
-  risk: "Safe" | "Moderate" | "High Risk";
+  risk: "Safe" | "Moderate" | "High Risk" | "Unverified";
+  verified: boolean;
+  excludedAccounts: number;
   flags: string[];
 };
 
-/** holderPcts: percent of supply per holder, largest first, pool/bonding-curve accounts excluded. */
-export function analyzeWallets(holderPcts: number[] | null): WalletReport {
-  if (!holderPcts) {
+export type HolderAccount = { address: string; uiAmount: number; owner: string | null };
+
+/**
+ * Percent of supply per holder, largest first. Excludes the pool / bonding-curve account
+ * (matched by token-account address or owner) and any extra program-owned owners given.
+ * Returns null when supply is invalid or an account's owner could not be resolved
+ * (an unresolved owner could be the pool, so the result would not be trustworthy).
+ */
+export function computeHolderPcts(
+  accounts: HolderAccount[],
+  supply: number,
+  excludeOwners: string[],
+): { pcts: number[]; excluded: number } | null {
+  if (!Number.isFinite(supply) || supply <= 0) return null;
+  if (accounts.some((a) => a.owner === null)) return null;
+  const ex = new Set(excludeOwners);
+  const kept = accounts.filter((a) => !ex.has(a.owner as string) && !ex.has(a.address));
+  return {
+    pcts: kept.map((a) => (a.uiAmount / supply) * 100).sort((a, b) => b - a),
+    excluded: accounts.length - kept.length,
+  };
+}
+
+/** holderPcts: percent of supply per holder, largest first, pool/bonding-curve accounts excluded. null = lookup failed. */
+export function analyzeWallets(holders: { pcts: number[]; excluded: number } | null, unavailableReason?: string): WalletReport {
+  const bundle = "Bundle/sniper check not performed (no transaction history analysed)";
+  if (!holders) {
     return {
       top10Pct: null,
-      risk: "Moderate",
-      flags: ["Holder data unavailable", "Bundle/sniper check unavailable on free data sources"],
+      risk: "Unverified",
+      verified: false,
+      excludedAccounts: 0,
+      flags: [`Holder data unavailable${unavailableReason ? `: ${unavailableReason}` : ""}`, bundle],
     };
   }
+  const holderPcts = holders.pcts;
   const top10 = Math.round(holderPcts.slice(0, 10).reduce((a, b) => a + b, 0) * 10) / 10;
-  const flags: string[] = ["Bundle/sniper check unavailable on free data sources"];
+  const flags: string[] = [bundle];
   if (holderPcts[0] !== undefined && holderPcts[0] > 10)
     flags.push(`Single wallet holds ${holderPcts[0].toFixed(1)}% of supply`);
   let risk: WalletReport["risk"] = "Safe";
@@ -102,7 +131,7 @@ export function analyzeWallets(holderPcts: number[] | null): WalletReport {
   } else if (top10 > 20 || (holderPcts[0] ?? 0) > 10) {
     risk = "Moderate";
   }
-  return { top10Pct: top10, risk, flags };
+  return { top10Pct: top10, risk, verified: true, excludedAccounts: holders.excluded, flags };
 }
 
 export type SecurityInput = {
@@ -114,37 +143,66 @@ export type SecurityInput = {
 };
 
 export type SecurityReport = {
-  verdict: "PASS" | "FAIL";
-  mintAuthorityDisabled: boolean;
-  freezeAuthorityDisabled: boolean;
+  verdict: "PASS" | "FAIL" | "UNVERIFIED";
+  /** null = not checked */
+  mintAuthorityDisabled: boolean | null;
+  freezeAuthorityDisabled: boolean | null;
   liquidity: string;
   flags: string[];
 };
 
-export function analyzeSecurity(s: SecurityInput): SecurityReport {
+function liquidityNote(dexId: string) {
+  return dexId === "pumpfun"
+    ? "On Pump.fun bonding curve (liquidity held by the program; not independently verified)"
+    : dexId === "pumpswap"
+      ? "Graduated to PumpSwap (LP burn not independently verified)"
+      : `Trading on ${dexId} (LP lock not verified)`;
+}
+
+/** s = null means the on-chain mint lookup failed; verdict is then UNVERIFIED, never PASS. */
+export function analyzeSecurity(s: SecurityInput | null, dexId: string, failureReason?: string): SecurityReport {
+  if (!s) {
+    return {
+      verdict: "UNVERIFIED",
+      mintAuthorityDisabled: null,
+      freezeAuthorityDisabled: null,
+      liquidity: liquidityNote(dexId),
+      flags: [`Security checks not completed: ${failureReason ?? "mint data unavailable"}`],
+    };
+  }
   const flags: string[] = [];
   if (s.mintAuthority) flags.push("Mint authority is still enabled (dev can print more tokens)");
   if (s.freezeAuthority) flags.push("Freeze authority is enabled (wallets can be frozen — honeypot risk)");
   if (s.transferFeeBps > 0) flags.push(`Hidden transfer tax of ${(s.transferFeeBps / 100).toFixed(2)}%`);
   if (s.extensions.includes("permanentDelegate")) flags.push("Permanent delegate can move anyone's tokens");
   if (s.extensions.includes("transferHook")) flags.push("Custom transfer hook can block sells");
-  const liquidity =
-    s.dexId === "pumpfun"
-      ? "On Pump.fun bonding curve (liquidity held by the program)"
-      : s.dexId === "pumpswap"
-        ? "Graduated to PumpSwap (LP burned at migration)"
-        : `Trading on ${s.dexId} (LP lock not verified)`;
   return {
     verdict: flags.length === 0 ? "PASS" : "FAIL",
     mintAuthorityDisabled: !s.mintAuthority,
     freezeAuthorityDisabled: !s.freezeAuthority,
-    liquidity,
+    liquidity: liquidityNote(s.dexId),
     flags,
   };
 }
 
+/** Reject only on verified risk. Unverified tokens are still sent but never marked security-approved. */
 export function shouldReject(security: SecurityReport, wallet: WalletReport) {
   return security.verdict === "FAIL" || wallet.risk === "High Risk";
+}
+
+export function isSecurityApproved(security: SecurityReport, wallet: WalletReport) {
+  return security.verdict === "PASS" && wallet.verified;
+}
+
+export const UNVERIFIED_SECURITY_SCORE_CAP = 40;
+export const UNVERIFIED_HOLDERS_SCORE_CAP = 60;
+
+/** Missing evidence lowers confidence: cap the AI Opportunity Score. */
+export function adjustScoreForEvidence(score: number, security: SecurityReport, wallet: WalletReport) {
+  let s = score;
+  if (security.verdict !== "PASS") s = Math.min(s, UNVERIFIED_SECURITY_SCORE_CAP);
+  if (!wallet.verified) s = Math.min(s, UNVERIFIED_HOLDERS_SCORE_CAP);
+  return Math.max(1, s);
 }
 
 export function shouldAlert(score: number) {
