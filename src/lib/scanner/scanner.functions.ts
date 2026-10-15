@@ -2,18 +2,21 @@ import { createServerFn } from "@tanstack/react-start";
 
 export const getDashboard = createServerFn({ method: "GET" }).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const [{ data: state }, { data: tokens }] = await Promise.all([
-    supabaseAdmin.from("scanner_state").select("paused_reason,last_run_at,last_run_summary").eq("id", 1).single(),
+  const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const [{ data: state }, { data: tokens }, { data: runs }] = await Promise.all([
+    supabaseAdmin.from("scanner_state").select("paused_reason,last_run_at,last_run_summary,max_coins_per_run").eq("id", 1).single(),
     supabaseAdmin
       .from("scanned_tokens")
       .select("mint,name,symbol,status,score,verdict,reports,alert_text,error,created_at")
       .order("created_at", { ascending: false })
       .limit(50),
+    supabaseAdmin.from("scan_runs").select("run_at,coins_checked,rpc_calls").gte("run_at", since).order("run_at", { ascending: false }).limit(400),
   ]);
   return {
     state,
     tokens: (tokens ?? []).map((t) => ({ ...t, reports: JSON.stringify(t.reports ?? {}) })),
     chatIdSet: !!process.env["TELEGRAM_CHAT_ID"],
+    credits: summarizeCredits(runs ?? []),
   };
 });
 
@@ -64,3 +67,33 @@ export const scanNow = createServerFn({ method: "POST" }).handler(async () => {
     return { ok: false, summary: e instanceof Error ? e.message : String(e) };
   }
 });
+
+export type RunRow = { run_at: string; coins_checked: number; rpc_calls: number };
+/** Estimated Helius credits (≈1 per standard RPC call). */
+export function summarizeCredits(runs: RunRow[]) {
+  const calls24h = runs.reduce((a, r) => a + r.rpc_calls, 0);
+  const coins24h = runs.reduce((a, r) => a + r.coins_checked, 0);
+  const avgPerRun = runs.length ? Math.round(calls24h / runs.length) : null;
+  return {
+    runs24h: runs.length,
+    calls24h,
+    coins24h,
+    avgPerRun,
+    avgPerCoin: coins24h ? Math.round(calls24h / coins24h) : null,
+    /** if the 5-minute schedule runs all month (8,640 runs) at the 24h average */
+    projected30d: avgPerRun === null ? null : avgPerRun * 8640,
+    recent: runs.slice(0, 10),
+  };
+}
+
+export const setMaxCoins = createServerFn({ method: "POST" })
+  .inputValidator((d: { value: number }) => {
+    const v = Math.round(Number(d.value));
+    if (!Number.isFinite(v) || v < 1 || v > 10) throw new Error("Choose between 1 and 10 coins");
+    return { value: v };
+  })
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    await supabaseAdmin.from("scanner_state").update({ max_coins_per_run: data.value }).eq("id", 1);
+    return { ok: true };
+  });
