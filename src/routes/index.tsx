@@ -136,7 +136,11 @@ function Dashboard() {
   );
 }
 
-function CreditsPanel({ credits, maxCoins }: { credits: Awaited<ReturnType<typeof getDashboard>>["credits"]; maxCoins: number }) {
+const EMPTY_CREDITS = { runs24h: 0, calls24h: 0, coins24h: 0, avgPerRun: null, avgPerCoin: null, projected30d: null, recent: [] };
+
+function CreditsPanel({ credits: raw, maxCoins }: { credits: Awaited<ReturnType<typeof getDashboard>>["credits"] | undefined; maxCoins: number }) {
+  // Data cached from before the credits field existed (or a failed lookup) has no credits object.
+  const credits = raw ?? EMPTY_CREDITS;
   const qc = useQueryClient();
   const [saving, setSaving] = useState(false);
   async function change(v: number) {
