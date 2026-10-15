@@ -59,9 +59,13 @@ describe("observations", () => {
     expect(o.status).toBe("unavailable");
     expect(o).not.toHaveProperty("price_usd");
   });
-  it("data-source failure is unavailable with a reason", () => {
-    const o = buildObservation({ checkpoint: "5m", dueAt: due, now, initialPrice: 0.0001, point, fetchError: "503" });
-    expect(o).toMatchObject({ status: "unavailable", reason: "Data source failed: 503" });
+  it("temporary data-source failure stays pending for retry, never recorded", () => {
+    const o = buildObservation({ checkpoint: "5m", dueAt: due, now, initialPrice: 0.0001, point, fetchError: "429" });
+    expect(o).toMatchObject({ status: "retry", reason: "Data source failed: 429" });
+  });
+  it("failure past the window becomes unavailable", () => {
+    const late = new Date(due.getTime() + 11 * 60_000);
+    expect(buildObservation({ checkpoint: "5m", dueAt: due, now: late, initialPrice: 0.0001, point, fetchError: "429" }).status).toBe("unavailable");
   });
   it("a check far past its window is not recorded as that checkpoint", () => {
     const late = new Date(due.getTime() + 30 * 60_000);

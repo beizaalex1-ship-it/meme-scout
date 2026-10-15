@@ -38,7 +38,7 @@ export async function collectDueObservations(limit = 60) {
     .order("due_at")
     .limit(limit);
   if (error) throw new Error(`observations query failed: ${error.message}`);
-  if (!due?.length) return { recorded: 0, unavailable: 0 };
+  if (!due?.length) return { recorded: 0, unavailable: 0, retry: 0 };
 
   type Row = (typeof due)[number] & { predictions: { mint: string; initial_price_usd: number | null } | null };
   const rows = due as Row[];
@@ -52,6 +52,7 @@ export async function collectDueObservations(limit = 60) {
   }
   let recorded = 0;
   let unavailable = 0;
+  let retry = 0;
   for (const r of rows) {
     const mint = r.predictions?.mint;
     const pair = mint ? pairs.get(mint) : undefined;
@@ -63,9 +64,14 @@ export async function collectDueObservations(limit = 60) {
       point: pair ? marketPointFromPair(pair) : null,
       fetchError,
     });
+    if (obs.status === "retry") {
+      retry++;
+      await db.from("prediction_observations").update({ reason: `Retrying — last attempt: ${obs.reason}` }).eq("id", r.id).eq("status", "pending");
+      continue;
+    }
     await db.from("prediction_observations").update(obs).eq("id", r.id).eq("status", "pending");
     if (obs.status === "recorded") recorded++;
     else unavailable++;
   }
-  return { recorded, unavailable };
+  return { recorded, unavailable, retry, ...(fetchError ? { fetchError: fetchError.slice(0, 120) } : {}) };
 }
