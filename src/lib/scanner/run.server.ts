@@ -48,9 +48,23 @@ export async function runScan(): Promise<string> {
       .sort((x, y) => y.quality - x.quality)
       .slice(0, MAX_TOKENS_PER_RUN);
 
+    // Atomically claim candidates: only mints this run inserted are analysed, so an overlapping
+    // run (e.g. after lock expiry) can never alert the same coin twice.
+    const { data: claimed, error: claimErr } = candidates.length
+      ? await db
+          .from("scanned_tokens")
+          .upsert(
+            candidates.map((c) => ({ mint: c.mint, name: c.pair.baseToken.name || null, symbol: c.pair.baseToken.symbol || null, status: "pending" })),
+            { onConflict: "mint", ignoreDuplicates: true },
+          )
+          .select("mint")
+      : { data: [], error: null };
+    if (claimErr) throw new Error(`claim failed: ${claimErr.message}`);
+    const claimedSet = new Set((claimed ?? []).map((r) => r.mint));
+
     let alerted = 0;
     let rejected = 0;
-    for (const c of candidates) {
+    for (const c of candidates.filter((x) => claimedSet.has(x.mint))) {
       const outcome = await analyzeToken(c.mint, c.pair, c.description);
       if (outcome === "paused") {
         summary = "Paused after AI access error";
@@ -83,7 +97,6 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
   if (!hunter.symbol) hunter.missing.push("Ticker");
   if (!hunter.mintTimestamp) hunter.missing.push("Mint Timestamp");
 
-  await db.from("scanned_tokens").upsert({ mint, name: hunter.name, symbol: hunter.symbol, status: "pending" });
 
   try {
     const t = pair.txns ?? {};
