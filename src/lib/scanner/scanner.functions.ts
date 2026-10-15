@@ -10,7 +10,7 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
       .select("mint,name,symbol,status,score,verdict,reports,alert_text,error,created_at")
       .order("created_at", { ascending: false })
       .limit(50),
-    supabaseAdmin.from("scan_runs").select("run_at,coins_checked,rpc_calls").gte("run_at", since).order("run_at", { ascending: false }).limit(400),
+    supabaseAdmin.from("scan_runs").select("run_at,coins_checked,rpc_calls,early_rejected,skipped_unverified,holder_rejected").gte("run_at", since).order("run_at", { ascending: false }).limit(400),
   ]);
   return {
     state,
@@ -68,7 +68,9 @@ export const scanNow = createServerFn({ method: "POST" }).handler(async () => {
   }
 });
 
-export type RunRow = { run_at: string; coins_checked: number; rpc_calls: number };
+export type RunRow = { run_at: string; coins_checked: number; rpc_calls: number; early_rejected?: number; skipped_unverified?: number; holder_rejected?: number };
+/** Approx. credits a full check costs (holders + forensics), used to estimate savings. */
+export const FULL_CHECK_CREDITS = 30;
 /** Estimated Helius credits (≈1 per standard RPC call). */
 export function summarizeCredits(runs: RunRow[]) {
   const calls24h = runs.reduce((a, r) => a + r.rpc_calls, 0);
@@ -82,6 +84,11 @@ export function summarizeCredits(runs: RunRow[]) {
     avgPerCoin: coins24h ? Math.round(calls24h / coins24h) : null,
     /** if the 5-minute schedule runs all month (8,640 runs) at the 24h average */
     projected30d: avgPerRun === null ? null : avgPerRun * 8640,
+    earlyRejected24h: runs.reduce((a, r) => a + (r.early_rejected ?? 0), 0),
+    skipped24h: runs.reduce((a, r) => a + (r.skipped_unverified ?? 0), 0),
+    holderRejected24h: runs.reduce((a, r) => a + (r.holder_rejected ?? 0), 0),
+    /** rough: each early reject / skip avoided a full check */
+    estSaved24h: runs.reduce((a, r) => a + ((r.early_rejected ?? 0) + (r.skipped_unverified ?? 0) + (r.holder_rejected ?? 0)) * FULL_CHECK_CREDITS, 0),
     recent: runs.slice(0, 10),
   };
 }

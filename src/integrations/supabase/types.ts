@@ -18,25 +18,34 @@ export type Database = {
         Row: {
           calls_by_method: Json
           coins_checked: number
+          early_rejected: number
+          holder_rejected: number
           id: string
           rpc_calls: number
           run_at: string
+          skipped_unverified: number
           summary: string | null
         }
         Insert: {
           calls_by_method?: Json
           coins_checked?: number
+          early_rejected?: number
+          holder_rejected?: number
           id?: string
           rpc_calls?: number
           run_at?: string
+          skipped_unverified?: number
           summary?: string | null
         }
         Update: {
           calls_by_method?: Json
           coins_checked?: number
+          early_rejected?: number
+          holder_rejected?: number
           id?: string
           rpc_calls?: number
           run_at?: string
+          skipped_unverified?: number
           summary?: string | null
         }
         Relationships: []

@@ -136,7 +136,7 @@ function Dashboard() {
   );
 }
 
-const EMPTY_CREDITS = { runs24h: 0, calls24h: 0, coins24h: 0, avgPerRun: null, avgPerCoin: null, projected30d: null, recent: [] };
+const EMPTY_CREDITS = { runs24h: 0, calls24h: 0, coins24h: 0, avgPerRun: null, avgPerCoin: null, projected30d: null, earlyRejected24h: 0, skipped24h: 0, holderRejected24h: 0, estSaved24h: 0, recent: [] };
 
 function CreditsPanel({ credits: raw, maxCoins }: { credits: Awaited<ReturnType<typeof getDashboard>>["credits"] | undefined; maxCoins: number }) {
   // Data cached from before the credits field existed (or a failed lookup) has no credits object.
@@ -174,7 +174,14 @@ function CreditsPanel({ credits: raw, maxCoins }: { credits: Awaited<ReturnType<
         <Stat label="Per coin (avg)" value={fmt(credits.avgPerCoin)} />
         <Stat label="30-day projection" value={fmt(credits.projected30d)} />
       </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 font-mono sm:grid-cols-4">
+        <Stat label="Failed safety (rejected early)" value={fmt(credits.earlyRejected24h)} />
+        <Stat label="Unverified (skipped)" value={fmt(credits.skipped24h)} />
+        <Stat label="Holder risk (rejected early)" value={fmt(credits.holderRejected24h)} />
+        <Stat label="Credits saved (est.)" value={`~${fmt(credits.estSaved24h)}`} />
+      </div>
       <p className="mt-2 text-xs text-muted-foreground">
+        Optimizer: one request checks every candidate's safety; only verified-safe coins get the full wallet checks.
         Counts every request sent to Helius (≈1 credit each, retries included). Projection assumes a scan every 5 minutes all month.
         {credits.runs24h === 0 && " No scans recorded in the last 24 hours yet."}
       </p>
@@ -182,7 +189,7 @@ function CreditsPanel({ credits: raw, maxCoins }: { credits: Awaited<ReturnType<
         <ul className="mt-3 space-y-1 font-mono text-xs text-muted-foreground">
           {credits.recent.map((r) => (
             <li key={r.run_at}>
-              {new Date(r.run_at).toLocaleTimeString()} · {r.coins_checked} coin(s) · {r.rpc_calls} credits
+              {new Date(r.run_at).toLocaleTimeString()} · {r.coins_checked} checked · {r.early_rejected ?? 0} rejected early · {r.skipped_unverified ?? 0} skipped · {r.rpc_calls} credits
             </li>
           ))}
         </ul>
