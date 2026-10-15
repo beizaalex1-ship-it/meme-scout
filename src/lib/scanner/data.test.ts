@@ -32,14 +32,14 @@ describe("Solana RPC", () => {
   it("times out slow endpoints", async () => {
     const slow: typeof fetch = (_u, init) =>
       new Promise((_r, rej) => init?.signal?.addEventListener("abort", () => rej(init.signal!.reason)));
-    await expect(rpc("getHealth", [], { urls: ["https://slow"], fetchImpl: slow, timeoutMs: 20 })).rejects.toMatchObject({
+    await expect(rpc("getHealth", [], { urls: ["https://slow"], fetchImpl: slow, timeoutMs: 20, retries: 0 })).rejects.toMatchObject({
       kind: "timeout",
     });
   });
 
   it("classifies 429 as rate limited", async () => {
     await expect(
-      rpc("getHealth", [], { urls: ["https://a"], fetchImpl: async () => new Response("", { status: 429 }) }),
+      rpc("getHealth", [], { urls: ["https://a"], retries: 0, fetchImpl: async () => new Response("", { status: 429 }) }),
     ).rejects.toMatchObject({ kind: "rate_limited" });
   });
 
