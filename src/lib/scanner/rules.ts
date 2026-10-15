@@ -1,4 +1,5 @@
 // Deterministic agent logic (no AI). Shared by the scanner and tests.
+import type { ForensicsReport } from "./forensics";
 
 export const ALERT_MIN_SCORE = 1; // every analyzed, non-rug token is sent
 export const MAX_LAUNCH_AGE_MIN = 10;
@@ -82,6 +83,7 @@ export type WalletReport = {
   verified: boolean;
   excludedAccounts: number;
   flags: string[];
+  forensics?: ForensicsReport;
 };
 
 export type HolderAccount = { address: string; uiAmount: number; owner: string | null };
@@ -107,31 +109,48 @@ export function computeHolderPcts(
   };
 }
 
-/** holderPcts: percent of supply per holder, largest first, pool/bonding-curve accounts excluded. null = lookup failed. */
-export function analyzeWallets(holders: { pcts: number[]; excluded: number } | null, unavailableReason?: string): WalletReport {
-  const bundle = "Bundle/sniper check not performed (no transaction history analysed)";
+/**
+ * holders: percent of supply per holder, largest first, pool/bonding-curve excluded. null = lookup failed.
+ * forensics: creator / early-buyer / funding analysis. Missing or incomplete forensics never yields "Safe".
+ */
+export function analyzeWallets(
+  holders: { pcts: number[]; excluded: number } | null,
+  unavailableReason?: string,
+  forensics?: ForensicsReport,
+): WalletReport {
+  const flags: string[] = [];
+  let risk: WalletReport["risk"] = "Unverified";
+  let top10: number | null = null;
   if (!holders) {
-    return {
-      top10Pct: null,
-      risk: "Unverified",
-      verified: false,
-      excludedAccounts: 0,
-      flags: [`Holder data unavailable${unavailableReason ? `: ${unavailableReason}` : ""}`, bundle],
-    };
+    flags.push(`Holder data unavailable${unavailableReason ? `: ${unavailableReason}` : ""}`);
+  } else {
+    const holderPcts = holders.pcts;
+    top10 = Math.round(holderPcts.slice(0, 10).reduce((a, b) => a + b, 0) * 10) / 10;
+    if (holderPcts[0] !== undefined && holderPcts[0] > 10)
+      flags.push(`Single wallet holds ${holderPcts[0].toFixed(1)}% of supply`);
+    risk = "Safe";
+    if (top10 > INSIDER_RED_FLAG_PCT) {
+      risk = "High Risk";
+      flags.push(`RED FLAG: top 10 holders own ${top10}% (over ${INSIDER_RED_FLAG_PCT}%)`);
+    } else if (top10 > 20 || (holderPcts[0] ?? 0) > 10) {
+      risk = "Moderate";
+    }
   }
-  const holderPcts = holders.pcts;
-  const top10 = Math.round(holderPcts.slice(0, 10).reduce((a, b) => a + b, 0) * 10) / 10;
-  const flags: string[] = [bundle];
-  if (holderPcts[0] !== undefined && holderPcts[0] > 10)
-    flags.push(`Single wallet holds ${holderPcts[0].toFixed(1)}% of supply`);
-  let risk: WalletReport["risk"] = "Safe";
-  if (top10 > INSIDER_RED_FLAG_PCT) {
-    risk = "High Risk";
-    flags.push(`RED FLAG: top 10 holders own ${top10}% (over ${INSIDER_RED_FLAG_PCT}%)`);
-  } else if (top10 > 20 || (holderPcts[0] ?? 0) > 10) {
-    risk = "Moderate";
+
+  if (!forensics) {
+    flags.push("Creator / sniper / bundle checks UNVERIFIED (not performed)");
+    if (risk === "Safe") risk = "Unverified";
+  } else {
+    flags.push(...forensics.redFlags);
+    flags.push(...forensics.suspected.map((s) => `SUSPECTED: ${s}`));
+    if (forensics.snipers.length)
+      flags.push(`Snipers: ${forensics.snipers.length} wallet(s) took ${forensics.snipers.reduce((a, s) => a + s.pct, 0).toFixed(1)}% right after launch`);
+    if (forensics.status !== "COMPLETE") flags.push(`Wallet forensics ${forensics.status === "UNVERIFIED" ? "UNVERIFIED" : "incomplete"}: ${forensics.limitations[0] ?? "data missing"}`);
+    if (forensics.redFlags.length) risk = "High Risk";
+    else if (risk !== "High Risk" && (forensics.suspected.length || forensics.snipers.length) && risk !== "Unverified") risk = "Moderate";
+    if (risk === "Safe" && forensics.status !== "COMPLETE") risk = "Unverified";
   }
-  return { top10Pct: top10, risk, verified: true, excludedAccounts: holders.excluded, flags };
+  return { top10Pct: top10, risk, verified: !!holders, excludedAccounts: holders?.excluded ?? 0, flags, forensics };
 }
 
 export type SecurityInput = {

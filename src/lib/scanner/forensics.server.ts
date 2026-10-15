@@ -168,7 +168,6 @@ export async function investigateWallets(
         fundingFailed.push(wallet);
       }
     }
-    if (top.length) notes.length; // funding window: last FUNDING_TXS_PER_BUYER txs before each buy
   }
 
   // 4. Creator's recent activity: other Pump.fun creates.
