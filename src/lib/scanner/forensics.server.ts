@@ -83,7 +83,7 @@ async function call<T>(b: Budget, method: string, params: unknown[], opts?: RpcO
 async function getTx(b: Budget, sig: string, mint: string, opts?: RpcOptions): Promise<ParsedTx | null> {
   const key = `${mint}:${sig}`;
   if (txCache.has(key)) return txCache.get(key)!;
-  const raw = await call<RawTx | null>(b, "getTransaction", [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }], opts);
+  const raw = await call<RawTx | null>(b, "getTransaction", [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }], opts);
   const parsed = raw ? parseTx(raw, mint) : null;
   if (raw) {
     if (txCache.size >= CACHE_MAX) txCache.delete(txCache.keys().next().value!);

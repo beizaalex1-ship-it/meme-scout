@@ -150,7 +150,7 @@ export function analyzeWallets(
     else if (risk !== "High Risk" && (forensics.suspected.length || forensics.snipers.length) && risk !== "Unverified") risk = "Moderate";
     if (risk === "Safe" && forensics.status !== "COMPLETE") risk = "Unverified";
   }
-  return { top10Pct: top10, risk, verified: !!holders, excludedAccounts: holders?.excluded ?? 0, flags, forensics };
+  return { top10Pct: top10, risk, verified: !!holders, excludedAccounts: holders?.excluded ?? 0, flags, ...(forensics ? { forensics } : {}) };
 }
 
 export type SecurityInput = {
