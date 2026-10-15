@@ -7,7 +7,7 @@ import {
   analyzeMarket,
   analyzeSecurity,
   analyzeWallets,
-  PUMP_GRADUATION_MCAP_USD,
+  MAX_LAUNCH_AGE_MIN,
   shouldAlert,
   shouldReject,
   type CoinHunterReport,
@@ -15,7 +15,6 @@ import {
 import { sendTelegram } from "./telegram.server";
 
 const MAX_TOKENS_PER_RUN = 5;
-const MIN_CURVE_MCAP = PUMP_GRADUATION_MCAP_USD * 0.5; // "graduating": at least ~50% along the curve
 
 export async function runScan(): Promise<string> {
   const db = supabaseAdmin;
@@ -27,7 +26,7 @@ export async function runScan(): Promise<string> {
 
   let summary = "";
   try {
-    const found = await discoverPumpMints();
+    const found = await discoverPumpMints(MAX_LAUNCH_AGE_MIN);
     const mints = found.map((f) => f.mint);
     const { data: known } = await db.from("scanned_tokens").select("mint").in("mint", mints.length ? mints : ["-"]);
     const knownSet = new Set((known ?? []).map((k) => k.mint));
@@ -37,7 +36,14 @@ export async function runScan(): Promise<string> {
     const candidates = fresh
       .map((f) => ({ ...f, pair: pairs.get(f.mint) }))
       .filter((c): c is typeof c & { pair: DexPair } => !!c.pair)
-      .filter((c) => c.pair.dexId !== "pumpfun" || (c.pair.marketCap ?? 0) >= MIN_CURVE_MCAP)
+      // "made well": real early trading activity, plus a bonus for listed website/socials
+      .map((c) => {
+        const tx = c.pair.txns?.["m5"] ?? { buys: 0, sells: 0 };
+        const links = (c.pair.info?.websites?.length ?? 0) + (c.pair.info?.socials?.length ?? 0);
+        return { ...c, quality: tx.buys + tx.sells + links * 20 };
+      })
+      .filter((c) => (c.pair.txns?.["m5"]?.buys ?? 0) >= 3)
+      .sort((x, y) => y.quality - x.quality)
       .slice(0, MAX_TOKENS_PER_RUN);
 
     let alerted = 0;

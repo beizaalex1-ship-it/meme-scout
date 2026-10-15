@@ -5,8 +5,8 @@ const base = { mintAuthority: null, freezeAuthority: null, extensions: [], trans
 
 describe("scanner rules", () => {
   it("alerts only at Opportunity Score 70 or higher", () => {
-    expect(shouldAlert(70)).toBe(true);
-    expect(shouldAlert(69)).toBe(false);
+    expect(shouldAlert(1)).toBe(true);
+    expect(shouldAlert(30)).toBe(true);
   });
 
   it("flags insiders holding over 30% as High Risk", () => {

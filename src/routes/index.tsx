@@ -73,7 +73,7 @@ function Dashboard() {
             <p className="font-mono text-xs uppercase tracking-widest text-primary">Solana · Pump.fun · every 5 min</p>
             <h1 className="mt-1 text-4xl font-bold">Coin Hunter</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              7-agent pipeline. Alerts fire at Opportunity Score 70+. Rugs are auto-rejected.
+              Brand-new launches (under 10 min old). Every analyzed coin is sent to Telegram; rugs are auto-rejected.
             </p>
           </div>
           <div className="flex gap-2">
