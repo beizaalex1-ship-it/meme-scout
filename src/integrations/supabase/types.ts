@@ -14,6 +14,122 @@ export type Database = {
   }
   public: {
     Tables: {
+      prediction_observations: {
+        Row: {
+          checkpoint: string
+          due_at: string
+          id: string
+          liquidity_usd: number | null
+          market_cap_usd: number | null
+          observed_at: string | null
+          prediction_id: string
+          price_change_pct: number | null
+          price_usd: number | null
+          reason: string | null
+          status: string
+          volume_h1_usd: number | null
+          volume_h24_usd: number | null
+        }
+        Insert: {
+          checkpoint: string
+          due_at: string
+          id?: string
+          liquidity_usd?: number | null
+          market_cap_usd?: number | null
+          observed_at?: string | null
+          prediction_id: string
+          price_change_pct?: number | null
+          price_usd?: number | null
+          reason?: string | null
+          status?: string
+          volume_h1_usd?: number | null
+          volume_h24_usd?: number | null
+        }
+        Update: {
+          checkpoint?: string
+          due_at?: string
+          id?: string
+          liquidity_usd?: number | null
+          market_cap_usd?: number | null
+          observed_at?: string | null
+          prediction_id?: string
+          price_change_pct?: number | null
+          price_usd?: number | null
+          reason?: string | null
+          status?: string
+          volume_h1_usd?: number | null
+          volume_h24_usd?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prediction_observations_prediction_id_fkey"
+            columns: ["prediction_id"]
+            isOneToOne: false
+            referencedRelation: "predictions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      predictions: {
+        Row: {
+          created_at: string
+          detected_at: string
+          discovery_key: string
+          id: string
+          initial_liquidity_usd: number | null
+          initial_market_cap_usd: number | null
+          initial_price_usd: number | null
+          mint: string
+          name: string | null
+          pair_created_at: string | null
+          score: number | null
+          security_verdict: string | null
+          snapshot: Json
+          status: string
+          symbol: string | null
+          verdict: string | null
+          wallet_risk: string | null
+        }
+        Insert: {
+          created_at?: string
+          detected_at?: string
+          discovery_key: string
+          id?: string
+          initial_liquidity_usd?: number | null
+          initial_market_cap_usd?: number | null
+          initial_price_usd?: number | null
+          mint: string
+          name?: string | null
+          pair_created_at?: string | null
+          score?: number | null
+          security_verdict?: string | null
+          snapshot?: Json
+          status: string
+          symbol?: string | null
+          verdict?: string | null
+          wallet_risk?: string | null
+        }
+        Update: {
+          created_at?: string
+          detected_at?: string
+          discovery_key?: string
+          id?: string
+          initial_liquidity_usd?: number | null
+          initial_market_cap_usd?: number | null
+          initial_price_usd?: number | null
+          mint?: string
+          name?: string | null
+          pair_created_at?: string | null
+          score?: number | null
+          security_verdict?: string | null
+          snapshot?: Json
+          status?: string
+          symbol?: string | null
+          verdict?: string | null
+          wallet_risk?: string | null
+        }
+        Relationships: []
+      }
       scan_runs: {
         Row: {
           calls_by_method: Json
