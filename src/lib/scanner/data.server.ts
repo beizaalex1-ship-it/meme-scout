@@ -188,36 +188,58 @@ export type MintInfo = {
   transferFeeBps: number;
 };
 
+export type MintResult = { ok: true; info: MintInfo } | { ok: false; reason: string };
+
+function parseMint(info: ParsedMint | undefined): MintResult {
+  if (!info || typeof info.decimals !== "number" || info.supply === undefined)
+    return { ok: false, reason: "mint account not found or not a parsed SPL mint" };
+  const fee = info.extensions?.find((e) => e.extension === "transferFeeConfig")?.state as
+    | { newerTransferFee?: { transferFeeBasisPoints?: number } }
+    | undefined;
+  return {
+    ok: true,
+    info: {
+      mintAuthority: info.mintAuthority ?? null,
+      freezeAuthority: info.freezeAuthority ?? null,
+      supply: Number(info.supply) / 10 ** info.decimals,
+      extensions: (info.extensions ?? []).map((e) => e.extension),
+      transferFeeBps: fee?.newerTransferFee?.transferFeeBasisPoints ?? 0,
+    },
+  };
+}
+
 /** Real on-chain mint data, or an explicit failure. Never substitutes assumed values. */
-export async function fetchMintInfo(
-  mint: string,
-  opts?: RpcOptions,
-): Promise<{ ok: true; info: MintInfo } | { ok: false; reason: string }> {
+export async function fetchMintInfo(mint: string, opts?: RpcOptions): Promise<MintResult> {
   try {
     const r = await rpc<{ value: { data: { parsed?: { info?: ParsedMint } } } | null }>(
       "getAccountInfo",
       [mint, { encoding: "jsonParsed", commitment: "confirmed" }],
       opts,
     );
-    const info = r?.value?.data?.parsed?.info;
-    if (!info || typeof info.decimals !== "number" || info.supply === undefined)
-      return { ok: false, reason: "mint account not found or not a parsed SPL mint" };
-    const fee = info.extensions?.find((e) => e.extension === "transferFeeConfig")?.state as
-      | { newerTransferFee?: { transferFeeBasisPoints?: number } }
-      | undefined;
-    return {
-      ok: true,
-      info: {
-        mintAuthority: info.mintAuthority ?? null,
-        freezeAuthority: info.freezeAuthority ?? null,
-        supply: Number(info.supply) / 10 ** info.decimals,
-        extensions: (info.extensions ?? []).map((e) => e.extension),
-        transferFeeBps: fee?.newerTransferFee?.transferFeeBasisPoints ?? 0,
-      },
-    };
+    return parseMint(r?.value?.data?.parsed?.info);
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Mint data for many mints in one request per 100 (≈1 credit each batch). Failures are per-mint, never assumed. */
+export async function fetchMintInfoBatch(mints: string[], opts?: RpcOptions): Promise<Map<string, MintResult>> {
+  const out = new Map<string, MintResult>();
+  for (let i = 0; i < mints.length; i += 100) {
+    const chunk = mints.slice(i, i + 100);
+    try {
+      const r = await rpc<{ value: ({ data: { parsed?: { info?: ParsedMint } } } | null)[] }>(
+        "getMultipleAccounts",
+        [chunk, { encoding: "jsonParsed", commitment: "confirmed" }],
+        opts,
+      );
+      chunk.forEach((m, j) => out.set(m, parseMint(r?.value?.[j]?.data?.parsed?.info)));
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      for (const m of chunk) out.set(m, { ok: false, reason });
+    }
+  }
+  return out;
 }
 
 /** Largest token accounts with resolved owners, pool/bonding curve excluded. Null when the lookup fails. */
