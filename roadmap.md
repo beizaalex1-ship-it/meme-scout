@@ -7,3 +7,4 @@
 - [x] Resilient Solana lookups (fallback RPCs, Pump.fun defaults), clear errored tokens, rescan
 - [x] Fresh scan verified
 - [x] Wallet Investigator forensics: creator, history, early buyers, funding, snipers, bundles
+- [x] Helius credit tracking + adjustable coins-per-scan cap
