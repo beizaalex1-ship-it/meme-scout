@@ -40,7 +40,7 @@ Agent 6 — Opportunity Analyst: weigh upside (market-cap room to grow, momentum
 Agent 7 — Chief Research Agent: write 3 punchy bullets (market momentum, social sentiment, wallet health) and a one-line final verdict for a Telegram alert. Not financial advice tone; be factual and concise.`;
 
 export async function runAiAgents(evidence: unknown): Promise<AiReport> {
-  const apiKey = process.env.LOVABLE_API_KEY;
+  const apiKey = process.env["LOVABLE_API_KEY"];
   if (!apiKey) throw new AiGatewayError(401, "LOVABLE_API_KEY is not configured");
 
   let failStatus: number | null = null;
@@ -63,7 +63,7 @@ export async function runAiAgents(evidence: unknown): Promise<AiReport> {
     model: provider.responses(MODEL),
     system: INSTRUCTIONS,
     prompt: `Evidence from agents 1, 2, 4 and 5:\n${JSON.stringify(evidence, null, 2)}`,
-    experimental_output: Output.object({ schema: aiSchema }),
+    output: Output.object({ schema: aiSchema }),
     providerOptions: {
       openai: {
         forceReasoning: true,
@@ -77,7 +77,7 @@ export async function runAiAgents(evidence: unknown): Promise<AiReport> {
 
   try {
     await result.consumeStream();
-    const out = await result.experimental_output;
+    const out = await result.output;
     return out;
   } catch (e) {
     if (failStatus) throw new AiGatewayError(failStatus, failBody.slice(0, 300));

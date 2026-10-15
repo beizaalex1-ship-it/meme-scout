@@ -1,3 +1,4 @@
+import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
@@ -82,13 +83,13 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
     const market = analyzeMarket({
       dexId: pair.dexId,
       marketCapUsd: pair.marketCap ?? pair.fdv ?? null,
-      volumeM5: pair.volume?.m5 ?? 0,
-      volumeH1: pair.volume?.h1 ?? 0,
-      buysM5: t.m5?.buys ?? 0,
-      sellsM5: t.m5?.sells ?? 0,
-      buysH1: t.h1?.buys ?? 0,
-      sellsH1: t.h1?.sells ?? 0,
-      priceChangeH1: pair.priceChange?.h1 ?? null,
+      volumeM5: pair.volume?.["m5"] ?? 0,
+      volumeH1: pair.volume?.["h1"] ?? 0,
+      buysM5: t["m5"]?.buys ?? 0,
+      sellsM5: t["m5"]?.sells ?? 0,
+      buysH1: t["h1"]?.buys ?? 0,
+      sellsH1: t["h1"]?.sells ?? 0,
+      priceChangeH1: pair.priceChange?.["h1"] ?? null,
     });
     const mintInfo = await fetchMintInfo(mint);
     const security = analyzeSecurity({ ...mintInfo, dexId: pair.dexId });
@@ -98,7 +99,7 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
       websites: pair.info?.websites?.map((w) => w.url) ?? [],
       socials: pair.info?.socials?.map((s) => `${s.type}: ${s.url}`) ?? [],
     };
-    const reports: Record<string, unknown> = { hunter, market, wallet, security, socials };
+    const reports: Record<string, Json> = JSON.parse(JSON.stringify( { hunter, market, wallet, security, socials }));
 
     if (shouldReject(security, wallet)) {
       const reason = security.verdict === "FAIL" ? security.flags[0] : wallet.flags.find((f) => f.startsWith("RED"));
@@ -120,9 +121,9 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
       }
       throw e;
     }
-    reports.social = ai.social;
-    reports.opportunity = ai.opportunity;
-    reports.chief = ai.chief;
+    reports["social"] = ai.social as unknown as Json;
+    reports["opportunity"] = ai.opportunity as unknown as Json;
+    reports["chief"] = ai.chief as unknown as Json;
 
     const score = ai.opportunity.score;
     const alertText = formatAlert({

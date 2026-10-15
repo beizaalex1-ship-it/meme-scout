@@ -23,7 +23,7 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /** Newest Solana Pump.fun mints seen on DexScreener profile/boost feeds. */
-export async function discoverPumpMints(): Promise<{ mint: string; description?: string }[]> {
+export async function discoverPumpMints(): Promise<{ mint: string; description: string | undefined }[]> {
   const feeds = await Promise.allSettled([
     getJson<TokenProfile[]>("https://api.dexscreener.com/token-profiles/latest/v1"),
     getJson<TokenProfile[]>("https://api.dexscreener.com/token-boosts/latest/v1"),
@@ -55,7 +55,7 @@ export async function fetchPairs(mints: string[]): Promise<Map<string, DexPair>>
 }
 
 function rpcUrl() {
-  return process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+  return process.env["SOLANA_RPC_URL"] || "https://api.mainnet-beta.solana.com";
 }
 
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {

@@ -13,7 +13,7 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
   return {
     state,
     tokens: (tokens ?? []).map((t) => ({ ...t, reports: JSON.stringify(t.reports ?? {}) })),
-    chatIdSet: !!process.env.TELEGRAM_CHAT_ID,
+    chatIdSet: !!process.env["TELEGRAM_CHAT_ID"],
   };
 });
 

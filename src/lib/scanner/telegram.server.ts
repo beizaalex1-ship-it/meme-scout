@@ -1,9 +1,9 @@
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
 
 export async function sendTelegram(html: string) {
-  const lovableKey = process.env.LOVABLE_API_KEY;
-  const tgKey = process.env.TELEGRAM_API_KEY;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const lovableKey = process.env["LOVABLE_API_KEY"];
+  const tgKey = process.env["TELEGRAM_API_KEY"];
+  const chatId = process.env["TELEGRAM_CHAT_ID"];
   if (!lovableKey) throw new Error("LOVABLE_API_KEY is not configured");
   if (!tgKey) throw new Error("Telegram is not connected");
   if (!chatId) throw new Error("TELEGRAM_CHAT_ID is not set — add your channel ID first");
