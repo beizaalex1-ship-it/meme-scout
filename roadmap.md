@@ -8,3 +8,7 @@
 - [x] Fresh scan verified
 - [x] Wallet Investigator forensics: creator, history, early buyers, funding, snipers, bundles
 - [x] Helius credit tracking + adjustable coins-per-scan cap
+- [x] Frozen predictions + outcome tracking (5m/15m/30m/60m/24h)
+- [ ] Step 2: time-based market features
+- [ ] Step 3: Chief/scoring upgrades (confidence separate from score)
+- [ ] Step 4: evaluation report

@@ -121,6 +121,8 @@ function Dashboard() {
 
         <CreditsPanel credits={data.credits} maxCoins={data.state?.max_coins_per_run ?? 3} />
 
+        <OutcomePanel predictions={data.predictions ?? []} />
+
         <section className="mt-8 space-y-3">
           {data.tokens.length === 0 && (
             <p className="rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
@@ -133,6 +135,68 @@ function Dashboard() {
         </section>
       </div>
     </main>
+  );
+}
+
+type Prediction = Awaited<ReturnType<typeof getDashboard>>["predictions"][number];
+const CHECKS = ["5m", "15m", "30m", "60m", "24h"];
+const fmtPrice = (n: number | null | undefined) => (n == null ? "—" : `$${n < 0.01 ? n.toPrecision(3) : n.toFixed(4)}`);
+
+function OutcomePanel({ predictions }: { predictions: Prediction[] }) {
+  return (
+    <section className="mt-8 rounded-md border border-border bg-card p-4">
+      <h2 className="font-mono text-sm uppercase tracking-wider text-muted-foreground">Outcome history</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Original predictions are frozen when a coin is found. Later prices are measured separately — a short-term price move is not a verdict.
+      </p>
+      {predictions.length === 0 ? (
+        <p className="mt-4 text-sm text-muted-foreground">No predictions recorded yet. They appear after the next analyzed coin.</p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full font-mono text-xs">
+            <thead className="text-left text-muted-foreground">
+              <tr>
+                <th className="py-1 pr-3">Coin</th>
+                <th className="pr-3">Predicted</th>
+                <th className="pr-3">Score / risk</th>
+                <th className="pr-3">Start price</th>
+                <th className="pr-3">Latest</th>
+                {CHECKS.map((c) => (
+                  <th key={c} className="pr-2">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {predictions.map((p) => {
+                const obs = p.prediction_observations ?? [];
+                const latest = [...obs].filter((o) => o.status === "recorded" && o.price_usd != null).sort((a, b) => (b.observed_at ?? "").localeCompare(a.observed_at ?? ""))[0];
+                return (
+                  <tr key={p.id} className="border-t border-border">
+                    <td className="py-1 pr-3">${p.symbol ?? "?"}</td>
+                    <td className="pr-3 text-muted-foreground">{new Date(p.detected_at).toLocaleString()} · {p.status}</td>
+                    <td className="pr-3">{p.score ?? "—"} / {p.wallet_risk ?? "—"} · {p.security_verdict ?? "—"}</td>
+                    <td className="pr-3">{fmtPrice(p.initial_price_usd)}</td>
+                    <td className="pr-3">
+                      {latest ? `${fmtPrice(latest.price_usd)} (${latest.price_change_pct == null ? "n/a" : `${latest.price_change_pct > 0 ? "+" : ""}${latest.price_change_pct}%`})` : "—"}
+                    </td>
+                    {CHECKS.map((c) => {
+                      const o = obs.find((x) => x.checkpoint === c);
+                      const label = !o ? "—" : o.status === "recorded" ? (o.price_change_pct == null ? "✓" : `${o.price_change_pct > 0 ? "+" : ""}${o.price_change_pct}%`) : o.status === "unavailable" ? "n/a" : "…";
+                      return (
+                        <td key={c} className="pr-2" title={o?.reason ?? o?.status ?? ""}>
+                          <span className={o?.status === "unavailable" ? "text-warning" : o?.status === "pending" ? "text-muted-foreground" : ""}>{label}</span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-2 text-xs text-muted-foreground">… pending · n/a unavailable (hover for reason) · % = change from start price</p>
+        </div>
+      )}
+    </section>
   );
 }
 

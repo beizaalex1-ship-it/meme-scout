@@ -4,6 +4,7 @@ import { computeHolderPcts } from "./rules";
 export type DexPair = {
   dexId: string;
   pairAddress: string;
+  priceUsd?: string;
   baseToken: { address: string; name: string; symbol: string };
   txns?: Record<string, { buys: number; sells: number }>;
   volume?: Record<string, number>;

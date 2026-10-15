@@ -16,6 +16,7 @@ import {
 import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
 import { planCandidates } from "./optimizer";
+import { predictionMarket, recordPrediction } from "./outcomes.server";
 
 export const DEFAULT_MAX_COINS_PER_RUN = 3;
 
@@ -79,6 +80,14 @@ export async function runScan(): Promise<string> {
         )
         .select("mint");
       opt.earlyRejected = ins?.length ?? 0;
+      const insSet = new Set((ins ?? []).map((r) => r.mint));
+      for (const c of plan.earlyReject.filter((x) => insSet.has(x.mint)))
+        await recordPrediction({
+          mint: c.mint, name: c.pair.baseToken.name || null, symbol: c.pair.baseToken.symbol || null, detectedAt: new Date(),
+          pairCreatedAt: c.pair.pairCreatedAt ?? null, status: "rejected", verdict: `REJECTED DUE TO RISK: ${c.security.flags[0]}`,
+          score: null, securityVerdict: c.security.verdict, walletRisk: null, market: predictionMarket(c.pair),
+          reports: { security: c.security }, missing: ["Wallet, social and opportunity checks skipped (early security rejection)"],
+        });
     }
     const candidates = plan.analyze;
 
@@ -141,6 +150,11 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
   if (!hunter.name) hunter.missing.push("Token Name");
   if (!hunter.symbol) hunter.missing.push("Ticker");
   if (!hunter.mintTimestamp) hunter.missing.push("Mint Timestamp");
+  // Market data frozen at detection time; outcome tracking compares against this.
+  const detectedAt = new Date();
+  const detectedMarket = predictionMarket(pair);
+  const freeze = (p: { status: "rejected" | "passed" | "alerted"; verdict: string | null; score: number | null; securityVerdict: string; walletRisk: string | null; reports: Record<string, unknown>; extraMissing?: string[] }) =>
+    recordPrediction({ mint, name: hunter.name, symbol: hunter.symbol, detectedAt, pairCreatedAt: pair.pairCreatedAt ?? null, market: detectedMarket, missing: [...hunter.missing, ...(p.extraMissing ?? [])], ...p });
 
 
   try {
@@ -175,6 +189,7 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
             updated_at: new Date().toISOString(),
           })
           .eq("mint", mint);
+        await freeze({ status: "rejected", verdict: `REJECTED DUE TO RISK: ${quick.flags.find((f) => f.startsWith("RED"))}`, score: null, securityVerdict: security.verdict, walletRisk: quick.risk, reports: { hunter, market, wallet: quick, security }, extraMissing: ["Wallet forensics, social and opportunity skipped (holder rejection)"] });
         return "holder_rejected";
       }
     }
@@ -200,6 +215,7 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
         .from("scanned_tokens")
         .update({ status: "rejected", verdict: `REJECTED DUE TO RISK: ${reason}`, reports, updated_at: new Date().toISOString() })
         .eq("mint", mint);
+      await freeze({ status: "rejected", verdict: `REJECTED DUE TO RISK: ${reason}`, score: null, securityVerdict: security.verdict, walletRisk: wallet.risk, reports, extraMissing: ["Social and opportunity skipped (risk rejection)"] });
       return "rejected";
     }
 
@@ -247,6 +263,7 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
         updated_at: new Date().toISOString(),
       })
       .eq("mint", mint);
+    await freeze({ status: alert ? "alerted" : "passed", verdict: ai.chief.takeaway, score, securityVerdict: security.verdict, walletRisk: wallet.risk, reports, extraMissing: security.verdict !== "PASS" ? ["Security UNVERIFIED"] : [] });
     return alert ? "alerted" : "passed";
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

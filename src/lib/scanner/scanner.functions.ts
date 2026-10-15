@@ -3,7 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 export const getDashboard = createServerFn({ method: "GET" }).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
-  const [{ data: state }, { data: tokens }, { data: runs }] = await Promise.all([
+  const [{ data: state }, { data: tokens }, { data: runs }, { data: preds }] = await Promise.all([
     supabaseAdmin.from("scanner_state").select("paused_reason,last_run_at,last_run_summary,max_coins_per_run").eq("id", 1).single(),
     supabaseAdmin
       .from("scanned_tokens")
@@ -11,12 +11,18 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
       .order("created_at", { ascending: false })
       .limit(50),
     supabaseAdmin.from("scan_runs").select("run_at,coins_checked,rpc_calls,early_rejected,skipped_unverified,holder_rejected").gte("run_at", since).order("run_at", { ascending: false }).limit(400),
+    supabaseAdmin
+      .from("predictions")
+      .select("id,mint,name,symbol,detected_at,status,score,wallet_risk,security_verdict,initial_price_usd,prediction_observations(checkpoint,status,observed_at,price_usd,price_change_pct,reason)")
+      .order("detected_at", { ascending: false })
+      .limit(25),
   ]);
   return {
     state,
     tokens: (tokens ?? []).map((t) => ({ ...t, reports: JSON.stringify(t.reports ?? {}) })),
     chatIdSet: !!process.env["TELEGRAM_CHAT_ID"],
     credits: summarizeCredits(runs ?? []),
+    predictions: preds ?? [],
   };
 });
 
@@ -61,6 +67,8 @@ export const scanNow = createServerFn({ method: "POST" }).handler(async () => {
   if (Date.now() - lastManual < 30_000) return { ok: false, summary: "Please wait 30 seconds between manual scans." };
   lastManual = Date.now();
   try {
+    const { collectDueObservations } = await import("./outcomes.server");
+    await collectDueObservations().catch((e) => console.error("outcome checks failed", e));
     const { runScan } = await import("./run.server");
     return { ok: true, summary: await runScan() };
   } catch (e) {
