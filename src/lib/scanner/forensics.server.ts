@@ -66,18 +66,10 @@ class Budget {
   }
 }
 
+/** rpc() already paces requests and retries 429s with exponential backoff on the Helius endpoint. */
 async function call<T>(b: Budget, method: string, params: unknown[], opts?: RpcOptions): Promise<T> {
   b.take();
-  try {
-    return await rpc<T>(method, params, opts);
-  } catch (e) {
-    if (e instanceof RpcError && e.kind === "rate_limited" && !e.message.includes("budget")) {
-      await new Promise((r) => setTimeout(r, 600));
-      b.take();
-      return rpc<T>(method, params, opts);
-    }
-    throw e;
-  }
+  return rpc<T>(method, params, opts);
 }
 
 async function getTx(b: Budget, sig: string, mint: string, opts?: RpcOptions): Promise<ParsedTx | null> {
