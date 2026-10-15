@@ -156,6 +156,7 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
       marketCapUsd: market.marketCapUsd,
       security: security.verdict,
       holdersVerified: wallet.verified,
+      forensics,
     });
     const alert = shouldAlert(score);
     if (alert) await sendTelegram(alertText);
