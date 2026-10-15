@@ -65,3 +65,43 @@ describe("Solana RPC", () => {
     expect(res).toEqual({ ok: true, holders: { pcts: [4], excluded: 1 } });
   });
 });
+
+describe("Helius-only RPC with backoff", () => {
+  it("retries 429 with backoff on the same endpoint and then succeeds", async () => {
+    let calls = 0;
+    const res = await rpc<number>("getSlot", [], {
+      urls: ["https://helius"],
+      baseDelayMs: 1,
+      fetchImpl: async () => (++calls < 3 ? new Response("", { status: 429 }) : ok(42)),
+    });
+    expect(res).toBe(42);
+    expect(calls).toBe(3);
+  });
+
+  it("gives up after the retry limit and reports rate_limited", async () => {
+    let calls = 0;
+    await expect(
+      rpc("getSlot", [], { urls: ["https://helius"], retries: 2, baseDelayMs: 1, fetchImpl: async () => (++calls, new Response("", { status: 429 })) }),
+    ).rejects.toMatchObject({ kind: "rate_limited" });
+    expect(calls).toBe(3);
+  });
+
+  it("does not retry a blocked (403) endpoint", async () => {
+    let calls = 0;
+    await expect(
+      rpc("getSlot", [], { urls: ["https://helius"], baseDelayMs: 1, fetchImpl: async () => (++calls, new Response("", { status: 403 })) }),
+    ).rejects.toMatchObject({ kind: "blocked" });
+    expect(calls).toBe(1);
+  });
+
+  it("uses only SOLANA_RPC_URL — no public fallbacks", async () => {
+    const { rpcUrls } = await import("./data.server");
+    const prev = process.env["SOLANA_RPC_URL"];
+    process.env["SOLANA_RPC_URL"] = "https://helius.example";
+    expect(rpcUrls()).toEqual(["https://helius.example"]);
+    delete process.env["SOLANA_RPC_URL"];
+    expect(rpcUrls()).toEqual([]);
+    await expect(rpc("getSlot", [])).rejects.toMatchObject({ kind: "blocked" });
+    if (prev) process.env["SOLANA_RPC_URL"] = prev;
+  });
+});
