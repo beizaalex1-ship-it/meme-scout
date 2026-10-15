@@ -283,3 +283,20 @@ const KNOWN_PROGRAM_OWNERS = [
   "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg", // Pump.fun migration / fee account
   "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", // Raydium AMM v4 authority
 ];
+
+export type DexPaid = { status: "PAID" | "NOT_PAID" | "UNKNOWN"; boosts: number };
+
+/** Whether the team paid DexScreener for a token profile (free public endpoint). Failures → UNKNOWN, never assumed. */
+export async function fetchDexPaid(mint: string): Promise<DexPaid> {
+  try {
+    const r = await fetch(`https://api.dexscreener.com/orders/v1/solana/${mint}`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return { status: "UNKNOWN", boosts: 0 };
+    const j = (await r.json()) as { orders?: { type: string; status: string }[]; boosts?: unknown[] } | unknown[];
+    const orders = Array.isArray(j) ? (j as { type: string; status: string }[]) : (j.orders ?? []);
+    const boosts = Array.isArray(j) ? 0 : (j.boosts?.length ?? 0);
+    const paid = orders.some((o) => o.type === "tokenProfile" && o.status === "approved");
+    return { status: paid ? "PAID" : "NOT_PAID", boosts };
+  } catch {
+    return { status: "UNKNOWN", boosts: 0 };
+  }
+}

@@ -2,7 +2,7 @@ import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
-import { discoverPumpMints, resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair } from "./data.server";
+import { discoverPumpMints, resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
 import {
   adjustScoreForEvidence,
   analyzeMarket,
@@ -185,7 +185,9 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
       ? analyzeWallets(holderRes.holders, undefined, forensics)
       : analyzeWallets(null, holderRes.reason, forensics);
     console.log(JSON.stringify({ evt: "token_checks", mint, security: security.verdict, holders: wallet.verified ? "verified" : "unverified", forensics: forensics.status }));
+    const dexPaid = await fetchDexPaid(mint);
     const socials = {
+      dexPaid,
       description: description ?? null,
       websites: pair.info?.websites?.map((w) => w.url) ?? [],
       socials: pair.info?.socials?.map((s) => `${s.type}: ${s.url}`) ?? [],
@@ -230,6 +232,7 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
       security: security.verdict,
       holdersVerified: wallet.verified,
       forensics,
+      dexPaid,
     });
     const alert = shouldAlert(score);
     if (alert) await sendTelegram(alertText);
