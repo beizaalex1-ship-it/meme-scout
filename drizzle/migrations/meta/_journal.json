@@ -8,6 +8,13 @@
       "when": 1791996563583,
       "tag": "0000_scanner_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792088901277,
+      "tag": "0001_scan_credit_tracking",
+      "breakpoints": true
     }
   ]
 }

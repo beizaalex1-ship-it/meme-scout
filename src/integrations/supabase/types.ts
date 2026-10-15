@@ -14,6 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      scan_runs: {
+        Row: {
+          calls_by_method: Json
+          coins_checked: number
+          id: string
+          rpc_calls: number
+          run_at: string
+          summary: string | null
+        }
+        Insert: {
+          calls_by_method?: Json
+          coins_checked?: number
+          id?: string
+          rpc_calls?: number
+          run_at?: string
+          summary?: string | null
+        }
+        Update: {
+          calls_by_method?: Json
+          coins_checked?: number
+          id?: string
+          rpc_calls?: number
+          run_at?: string
+          summary?: string | null
+        }
+        Relationships: []
+      }
       scanned_tokens: {
         Row: {
           alert_text: string | null
@@ -62,6 +89,7 @@ export type Database = {
           last_run_at: string | null
           last_run_summary: string | null
           lock_until: string | null
+          max_coins_per_run: number
           paused_reason: string | null
         }
         Insert: {
@@ -69,6 +97,7 @@ export type Database = {
           last_run_at?: string | null
           last_run_summary?: string | null
           lock_until?: string | null
+          max_coins_per_run?: number
           paused_reason?: string | null
         }
         Update: {
@@ -76,6 +105,7 @@ export type Database = {
           last_run_at?: string | null
           last_run_summary?: string | null
           lock_until?: string | null
+          max_coins_per_run?: number
           paused_reason?: string | null
         }
         Relationships: []
