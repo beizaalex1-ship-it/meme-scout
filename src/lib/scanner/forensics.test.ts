@@ -114,6 +114,13 @@ describe("false-positive prevention", () => {
     expect(r.suspected).toEqual([]);
   });
 
+  it("ignores non-signing receivers such as pool vaults", () => {
+    const migrate = tx({ signature: "m", slot: 100, feePayer: "BOT", signers: ["BOT"], tokenDeltas: { VAULT: SUPPLY * 0.8 } });
+    const r = analyzeForensics(input({ earlyTxs: [migrate] }));
+    expect(r.snipers).toEqual([]);
+    expect(r.earlyBuyers.some((b) => b.wallet === "VAULT")).toBe(false);
+  });
+
   it("does not count the bonding curve as a buyer", () => {
     const r = analyzeForensics(input({ earlyTxs: [buy("A", 1, 105)] }));
     expect(r.earlyBuyers.map((b) => b.wallet).sort()).toEqual(["A", "DEV"]);

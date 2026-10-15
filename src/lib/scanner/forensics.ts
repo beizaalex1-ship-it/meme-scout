@@ -135,7 +135,8 @@ export function analyzeForensics(input: ForensicsInput): ForensicsReport {
       for (const [owner, delta] of Object.entries(tx.tokenDeltas)) {
         if (exclude.has(owner)) continue;
         if (owner === creatorWallet && delta < 0) creatorSold = true;
-        if (delta <= 0) continue;
+        // Only wallets that signed the tx count as buyers (pool vaults / program accounts never sign).
+        if (delta <= 0 || !tx.signers.includes(owner)) continue;
         const prev = acquired.get(owner);
         if (prev) prev.amount += delta;
         else acquired.set(owner, { amount: delta, slot: tx.slot, signature: tx.signature });
