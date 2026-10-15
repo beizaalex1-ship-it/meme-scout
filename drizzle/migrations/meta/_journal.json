@@ -15,6 +15,13 @@
       "when": 1792088901277,
       "tag": "0001_scan_credit_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792089220496,
+      "tag": "0002_scan_runs_optimizer_counts",
+      "breakpoints": true
     }
   ]
 }
