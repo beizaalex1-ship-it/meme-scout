@@ -65,7 +65,8 @@ export function scheduleObservations(detectedAt: Date) {
 
 export type ObservationResult =
   | { status: "recorded"; observed_at: string; price_usd: number | null; liquidity_usd: number | null; market_cap_usd: number | null; volume_h1_usd: number | null; volume_h24_usd: number | null; price_change_pct: number | null; reason: string | null }
-  | { status: "unavailable"; observed_at: string; reason: string };
+  | { status: "unavailable"; observed_at: string; reason: string }
+  | { status: "retry"; reason: string };
 
 /**
  * Turns a fetch result into an observation. point = null means the token was not listed;
@@ -83,7 +84,9 @@ export function buildObservation(args: {
   const lateMin = (args.now.getTime() - args.dueAt.getTime()) / 60_000;
   if (lateMin > MAX_LATE_MIN[args.checkpoint])
     return { status: "unavailable", observed_at, reason: `Missed window: checked ${Math.round(lateMin)} min after due time` };
-  if (args.fetchError) return { status: "unavailable", observed_at, reason: `Data source failed: ${args.fetchError.slice(0, 200)}` };
+  // Temporary source failure: stay pending and retry next scan; the window check above
+  // turns it into "unavailable" if it never succeeds in time.
+  if (args.fetchError) return { status: "retry", reason: `Data source failed: ${args.fetchError.slice(0, 200)}` };
   if (!args.point) return { status: "unavailable", observed_at, reason: "Token no longer listed on DexScreener" };
   const p = args.point;
   return {
