@@ -8,6 +8,8 @@ export type AlertInput = {
   bullets: string[];
   takeaway: string;
   marketCapUsd: number | null;
+  security?: "PASS" | "FAIL" | "UNVERIFIED";
+  holdersVerified?: boolean;
 };
 
 export function formatAlert(a: AlertInput, test = false) {
@@ -17,6 +19,9 @@ export function formatAlert(a: AlertInput, test = false) {
     `🚨 <b>${e(a.name)}</b> ($${e(a.symbol)})`,
     `<b>CA:</b> <code>${e(a.mint)}</code>`,
     `<b>Opportunity Score:</b> ${a.score}/100  •  <b>MC:</b> ${mc}`,
+    a.security
+      ? `🛡 <b>Security:</b> ${a.security === "PASS" ? "PASS (on-chain verified)" : a.security === "UNVERIFIED" ? "⚠️ UNVERIFIED — checks could not be completed" : "FAIL"}  •  <b>Holders:</b> ${a.holdersVerified ? "verified" : "⚠️ unverified"}`
+      : "",
     "",
     ...a.bullets.map((b) => `• ${e(b)}`),
     "",
