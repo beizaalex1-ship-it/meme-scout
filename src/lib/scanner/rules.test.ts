@@ -85,3 +85,17 @@ describe("scanner rules", () => {
     expect(adjustScoreForEvidence(90, pass, analyzeWallets(h([2])))).toBe(90);
   });
 });
+
+import { summarizeCredits } from "./scanner.functions";
+describe("Helius credit summary", () => {
+  it("averages per scan and per coin and projects 8,640 scans a month", () => {
+    const c = summarizeCredits([
+      { run_at: "a", coins_checked: 3, rpc_calls: 90 },
+      { run_at: "b", coins_checked: 1, rpc_calls: 30 },
+    ]);
+    expect(c).toMatchObject({ calls24h: 120, avgPerRun: 60, avgPerCoin: 30, projected30d: 518_400 });
+  });
+  it("shows no projection without data", () => {
+    expect(summarizeCredits([]).projected30d).toBeNull();
+  });
+});

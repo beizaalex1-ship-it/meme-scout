@@ -93,6 +93,13 @@ export type RpcOptions = {
   minIntervalMs?: number;
 };
 
+/** Requests sent to the RPC provider (each attempt counts; Helius bills ~1 credit per standard call). */
+export const rpcUsage = { total: 0, byMethod: {} as Record<string, number> };
+export function resetRpcUsage() {
+  rpcUsage.total = 0;
+  rpcUsage.byMethod = {};
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Global pacing so parallel callers stay under the provider's per-second limit.
@@ -130,6 +137,8 @@ export async function rpc<T>(method: string, params: unknown[], opts: RpcOptions
       let retryAfter: string | null = null;
       try {
         await pace(minIntervalMs);
+        rpcUsage.total++;
+        rpcUsage.byMethod[method] = (rpcUsage.byMethod[method] ?? 0) + 1;
         const res = await doFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },

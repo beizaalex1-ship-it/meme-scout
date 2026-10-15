@@ -2,7 +2,7 @@ import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
-import { discoverPumpMints, fetchHolderPcts, fetchMintInfo, fetchPairs, type DexPair } from "./data.server";
+import { discoverPumpMints, resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfo, fetchPairs, type DexPair } from "./data.server";
 import {
   adjustScoreForEvidence,
   analyzeMarket,
@@ -16,7 +16,7 @@ import {
 import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
 
-const MAX_TOKENS_PER_RUN = 5;
+export const DEFAULT_MAX_COINS_PER_RUN = 3;
 
 export async function runScan(): Promise<string> {
   const db = supabaseAdmin;
@@ -27,6 +27,9 @@ export async function runScan(): Promise<string> {
   if (!locked) return "Another scan is already running";
 
   let summary = "";
+  let analyzedCount = 0;
+  const maxCoins = Math.min(10, Math.max(1, state?.max_coins_per_run ?? DEFAULT_MAX_COINS_PER_RUN));
+  resetRpcUsage();
   try {
     const found = await discoverPumpMints(MAX_LAUNCH_AGE_MIN);
     const mints = found.map((f) => f.mint);
@@ -46,7 +49,7 @@ export async function runScan(): Promise<string> {
       })
       .filter((c) => (c.pair.txns?.["m5"]?.buys ?? 0) >= 3)
       .sort((x, y) => y.quality - x.quality)
-      .slice(0, MAX_TOKENS_PER_RUN);
+      .slice(0, maxCoins);
 
     // Atomically claim candidates: only mints this run inserted are analysed, so an overlapping
     // run (e.g. after lock expiry) can never alert the same coin twice.
@@ -65,6 +68,7 @@ export async function runScan(): Promise<string> {
     let alerted = 0;
     let rejected = 0;
     for (const c of candidates.filter((x) => claimedSet.has(x.mint))) {
+      analyzedCount++;
       const outcome = await analyzeToken(c.mint, c.pair, c.description);
       if (outcome === "paused") {
         summary = "Paused after AI access error";
@@ -76,6 +80,12 @@ export async function runScan(): Promise<string> {
     summary = `Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected}, alerted ${alerted}`;
     return summary;
   } finally {
+    await db.from("scan_runs").insert({
+      coins_checked: analyzedCount,
+      rpc_calls: rpcUsage.total,
+      calls_by_method: { ...rpcUsage.byMethod },
+      summary: summary || null,
+    });
     await db
       .from("scanner_state")
       .update({ lock_until: null, last_run_at: new Date().toISOString(), ...(summary ? { last_run_summary: summary } : {}) })

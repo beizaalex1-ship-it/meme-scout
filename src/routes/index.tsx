@@ -1,7 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { getDashboard, resumeScanner, scanNow, sendTestAlert } from "@/lib/scanner/scanner.functions";
+import { getDashboard, resumeScanner, scanNow, sendTestAlert, setMaxCoins } from "@/lib/scanner/scanner.functions";
 
 const dashboardQuery = queryOptions({
   queryKey: ["dashboard"],
@@ -119,6 +119,8 @@ function Dashboard() {
           <p className="mt-2 font-mono text-xs text-muted-foreground">{data.state.last_run_summary}</p>
         )}
 
+        <CreditsPanel credits={data.credits} maxCoins={data.state?.max_coins_per_run ?? 3} />
+
         <section className="mt-8 space-y-3">
           {data.tokens.length === 0 && (
             <p className="rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
@@ -131,6 +133,57 @@ function Dashboard() {
         </section>
       </div>
     </main>
+  );
+}
+
+function CreditsPanel({ credits, maxCoins }: { credits: Awaited<ReturnType<typeof getDashboard>>["credits"]; maxCoins: number }) {
+  const qc = useQueryClient();
+  const [saving, setSaving] = useState(false);
+  async function change(v: number) {
+    setSaving(true);
+    await setMaxCoins({ data: { value: v } });
+    await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    setSaving(false);
+  }
+  const fmt = (n: number | null) => (n === null ? "—" : n.toLocaleString("en-US"));
+  return (
+    <section className="mt-8 rounded-md border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-mono text-xs uppercase tracking-widest text-primary">Helius credits (estimated)</h2>
+        <label className="flex items-center gap-2 text-sm">
+          Coins checked per scan
+          <select
+            value={maxCoins}
+            disabled={saving}
+            onChange={(e) => change(Number(e.target.value))}
+            className="rounded border border-border bg-background px-2 py-1 font-mono"
+          >
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 font-mono sm:grid-cols-4">
+        <Stat label="Last 24h" value={fmt(credits.calls24h)} />
+        <Stat label="Per scan (avg)" value={fmt(credits.avgPerRun)} />
+        <Stat label="Per coin (avg)" value={fmt(credits.avgPerCoin)} />
+        <Stat label="30-day projection" value={fmt(credits.projected30d)} />
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Counts every request sent to Helius (≈1 credit each, retries included). Projection assumes a scan every 5 minutes all month.
+        {credits.runs24h === 0 && " No scans recorded in the last 24 hours yet."}
+      </p>
+      {credits.recent.length > 0 && (
+        <ul className="mt-3 space-y-1 font-mono text-xs text-muted-foreground">
+          {credits.recent.map((r) => (
+            <li key={r.run_at}>
+              {new Date(r.run_at).toLocaleTimeString()} · {r.coins_checked} coin(s) · {r.rpc_calls} credits
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
