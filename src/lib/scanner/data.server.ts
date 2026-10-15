@@ -58,14 +58,10 @@ export async function fetchPairs(mints: string[]): Promise<Map<string, DexPair>>
   return out;
 }
 
-export function rpcUrls() {
+/** Primary Helius endpoint only. Public RPCs are not used: they block or rate-limit cloud IPs. */
+export function rpcUrls(): string[] {
   const custom = process.env["SOLANA_RPC_URL"];
-  return [
-    ...(custom ? [custom] : []),
-    "https://api.mainnet-beta.solana.com",
-    "https://solana-rpc.publicnode.com",
-    "https://solana.drpc.org",
-  ];
+  return custom ? [custom] : [];
 }
 
 export class RpcError extends Error {
@@ -86,43 +82,85 @@ function safeHost(url: string) {
   }
 }
 
-export type RpcOptions = { urls?: string[]; fetchImpl?: typeof fetch; timeoutMs?: number };
+export type RpcOptions = {
+  urls?: string[];
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  /** retries per endpoint for 429 / timeout / 5xx (exponential backoff) */
+  retries?: number;
+  baseDelayMs?: number;
+  /** minimum gap between requests (shared across the worker instance) */
+  minIntervalMs?: number;
+};
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Global pacing so parallel callers stay under the provider's per-second limit.
+let nextSlot = 0;
+async function pace(minIntervalMs: number) {
+  if (minIntervalMs <= 0) return;
+  const now = Date.now();
+  const at = Math.max(now, nextSlot);
+  nextSlot = at + minIntervalMs;
+  if (at > now) await sleep(at - now);
+}
+
+/** Exponential backoff with jitter; honours Retry-After (seconds) when the provider sends it. */
+export function backoffMs(attempt: number, baseDelayMs: number, retryAfter?: string | null) {
+  const ra = retryAfter ? Number(retryAfter) : NaN;
+  if (Number.isFinite(ra) && ra > 0) return Math.min(ra * 1000, 10_000);
+  return baseDelayMs * 2 ** attempt + Math.floor(Math.random() * baseDelayMs);
+}
+
+const RETRYABLE = new Set<RpcError["kind"]>(["rate_limited", "timeout", "network"]);
 
 export async function rpc<T>(method: string, params: unknown[], opts: RpcOptions = {}): Promise<T> {
   const urls = opts.urls ?? rpcUrls();
+  if (!urls.length) throw new RpcError("blocked", "SOLANA_RPC_URL is not configured");
   const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 8_000;
+  const retries = opts.retries ?? 4;
+  const baseDelayMs = opts.baseDelayMs ?? 300;
+  const minIntervalMs = opts.minIntervalMs ?? (opts.fetchImpl ? 0 : 110);
   const errors: RpcError[] = [];
   for (const url of urls) {
     const host = safeHost(url);
-    const started = Date.now();
-    try {
-      const res = await doFetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) {
-        const kind = res.status === 429 ? "rate_limited" : res.status === 403 || res.status === 401 ? "blocked" : "http";
-        throw new RpcError(kind, `HTTP ${res.status}`);
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const started = Date.now();
+      let retryAfter: string | null = null;
+      try {
+        await pace(minIntervalMs);
+        const res = await doFetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) {
+          retryAfter = res.headers.get("retry-after");
+          const kind = res.status === 429 ? "rate_limited" : res.status === 403 || res.status === 401 ? "blocked" : res.status >= 500 ? "network" : "http";
+          throw new RpcError(kind, `HTTP ${res.status}`);
+        }
+        const body = (await res.json()) as { result?: T; error?: { code?: number; message: string } };
+        if (body.error) throw new RpcError(body.error.code === 429 || body.error.code === -32429 ? "rate_limited" : "rpc", body.error.message.slice(0, 160));
+        return body.result as T;
+      } catch (e) {
+        const err =
+          e instanceof RpcError
+            ? e
+            : e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")
+              ? new RpcError("timeout", `timed out after ${timeoutMs}ms`)
+              : new RpcError("network", e instanceof Error ? e.message.slice(0, 160) : String(e));
+        errors.push(err);
+        const willRetry = RETRYABLE.has(err.kind) && attempt < retries;
+        console.warn(JSON.stringify({ evt: "rpc_fail", method, host, kind: err.kind, msg: err.message, attempt, retry: willRetry, ms: Date.now() - started }));
+        if (!willRetry) break;
+        await sleep(backoffMs(attempt, baseDelayMs, retryAfter));
       }
-      const body = (await res.json()) as { result?: T; error?: { code?: number; message: string } };
-      if (body.error) throw new RpcError(body.error.code === 429 ? "rate_limited" : "rpc", body.error.message.slice(0, 160));
-      return body.result as T;
-    } catch (e) {
-      const err =
-        e instanceof RpcError
-          ? e
-          : e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")
-            ? new RpcError("timeout", `timed out after ${timeoutMs}ms`)
-            : new RpcError("network", e instanceof Error ? e.message.slice(0, 160) : String(e));
-      errors.push(err);
-      console.warn(JSON.stringify({ evt: "rpc_fail", method, host, kind: err.kind, msg: err.message, ms: Date.now() - started }));
     }
   }
   const last = errors.at(-1);
-  throw new RpcError(last?.kind ?? "network", `${method} failed on ${urls.length} endpoint(s): ${errors.map((x) => x.kind).join(", ") || "no endpoints"}`);
+  throw new RpcError(last?.kind ?? "network", `${method} failed after ${errors.length} attempt(s): ${[...new Set(errors.map((x) => x.kind))].join(", ")}`);
 }
 
 type ParsedMint = {
