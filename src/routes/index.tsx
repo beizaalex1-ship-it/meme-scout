@@ -1,7 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { getDashboard, resumeScanner, sendTestAlert } from "@/lib/scanner/scanner.functions";
+import { getDashboard, resumeScanner, scanNow, sendTestAlert } from "@/lib/scanner/scanner.functions";
 
 const dashboardQuery = queryOptions({
   queryKey: ["dashboard"],
@@ -48,6 +48,15 @@ function Dashboard() {
     setTestMsg(r.ok ? "Test alert sent — check your Telegram channel." : `Failed: ${r.error}`);
     setBusy(false);
   }
+  const [scanning, setScanning] = useState(false);
+  async function scan() {
+    setScanning(true);
+    setTestMsg(null);
+    const r = await scanNow();
+    setTestMsg(r.ok ? `Scan finished: ${r.summary}` : `Scan failed: ${r.summary}`);
+    await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    setScanning(false);
+  }
   async function resume() {
     await resumeScanner();
     await qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -67,6 +76,14 @@ function Dashboard() {
               7-agent pipeline. Alerts fire at Opportunity Score 70+. Rugs are auto-rejected.
             </p>
           </div>
+          <div className="flex gap-2">
+          <button
+            onClick={scan}
+            disabled={scanning}
+            className="rounded-md border border-primary px-4 py-2 font-semibold text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
+          >
+            {scanning ? "Scanning…" : "Scan now"}
+          </button>
           <button
             onClick={test}
             disabled={busy}
@@ -74,6 +91,7 @@ function Dashboard() {
           >
             {busy ? "Sending…" : "Send test alert"}
           </button>
+          </div>
         </header>
 
         {testMsg && <p className="mt-4 rounded-md border border-border bg-card p-3 font-mono text-sm">{testMsg}</p>}
