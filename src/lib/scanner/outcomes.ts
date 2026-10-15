@@ -77,7 +77,7 @@ export function buildObservation(args: {
   now: Date;
   initialPrice: number | null;
   point: MarketPoint | null;
-  fetchError?: string;
+  fetchError?: string | undefined;
 }): ObservationResult {
   const observed_at = args.now.toISOString();
   const lateMin = (args.now.getTime() - args.dueAt.getTime()) / 60_000;
