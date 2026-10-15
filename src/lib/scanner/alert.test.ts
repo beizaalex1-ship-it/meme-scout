@@ -36,3 +36,10 @@ describe("Telegram alert wallet section", () => {
     expect(text).toContain("Creator UNVERIFIED");
   });
 });
+
+import { formatAlert as fa } from "./alert";
+describe("dex paid line", () => {
+  const base = { name: "A", symbol: "A", mint: "m", score: 5, bullets: [], takeaway: "t", marketCapUsd: null };
+  it("shows paid", () => expect(fa({ ...base, dexPaid: { status: "PAID", boosts: 0 } })).toContain("DEX paid:</b> ✅ Yes"));
+  it("unknown is never shown as paid", () => expect(fa({ ...base, dexPaid: { status: "UNKNOWN", boosts: 0 } })).toContain("Unknown"));
+});

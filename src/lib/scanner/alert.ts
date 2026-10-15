@@ -1,4 +1,5 @@
 import type { ForensicsReport } from "./forensics";
+import type { DexPaid } from "./data.server";
 import { escapeHtml as e } from "./rules";
 
 export type AlertInput = {
@@ -12,6 +13,7 @@ export type AlertInput = {
   security?: "PASS" | "FAIL" | "UNVERIFIED";
   holdersVerified?: boolean;
   forensics?: ForensicsReport;
+  dexPaid?: DexPaid;
 };
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
@@ -54,6 +56,9 @@ export function formatAlert(a: AlertInput, test = false) {
     `<b>Opportunity Score:</b> ${a.score}/100  •  <b>MC:</b> ${mc}`,
     a.security
       ? `🛡 <b>Security:</b> ${a.security === "PASS" ? "PASS (on-chain verified)" : a.security === "UNVERIFIED" ? "⚠️ UNVERIFIED — checks could not be completed" : "FAIL"}  •  <b>Holders:</b> ${a.holdersVerified ? "verified" : "⚠️ unverified"}`
+      : "",
+    a.dexPaid
+      ? `💰 <b>DEX paid:</b> ${a.dexPaid.status === "PAID" ? "✅ Yes" : a.dexPaid.status === "NOT_PAID" ? "❌ No" : "⚠️ Unknown (lookup failed)"}${a.dexPaid.boosts ? `  •  🚀 ${a.dexPaid.boosts} boost(s)` : ""}`
       : "",
     ...(a.forensics !== undefined || a.security ? ["", ...formatWalletSection(a.forensics)] : []),
     "",
