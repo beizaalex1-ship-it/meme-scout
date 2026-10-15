@@ -4,6 +4,7 @@ import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
 import { discoverPumpMints, fetchHolderPcts, fetchMintInfo, fetchPairs, type DexPair } from "./data.server";
 import {
+  adjustScoreForEvidence,
   analyzeMarket,
   analyzeSecurity,
   analyzeWallets,
@@ -97,9 +98,15 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
       sellsH1: t["h1"]?.sells ?? 0,
       priceChangeH1: pair.priceChange?.["h1"] ?? null,
     });
-    const mintInfo = await fetchMintInfo(mint);
-    const security = analyzeSecurity({ ...mintInfo, dexId: pair.dexId });
-    const wallet = analyzeWallets(await fetchHolderPcts(mint, mintInfo.supply, pair.pairAddress));
+    const mintRes = await fetchMintInfo(mint);
+    const security = mintRes.ok
+      ? analyzeSecurity({ ...mintRes.info, dexId: pair.dexId }, pair.dexId)
+      : analyzeSecurity(null, pair.dexId, mintRes.reason);
+    const holderRes = mintRes.ok
+      ? await fetchHolderPcts(mint, mintRes.info.supply, pair.pairAddress)
+      : { ok: false as const, reason: "mint supply unknown" };
+    const wallet = holderRes.ok ? analyzeWallets(holderRes.holders) : analyzeWallets(null, holderRes.reason);
+    console.log(JSON.stringify({ evt: "token_checks", mint, security: security.verdict, holders: wallet.verified ? "verified" : "unverified" }));
     const socials = {
       description: description ?? null,
       websites: pair.info?.websites?.map((w) => w.url) ?? [],
@@ -131,7 +138,9 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
     reports["opportunity"] = ai.opportunity as unknown as Json;
     reports["chief"] = ai.chief as unknown as Json;
 
-    const score = ai.opportunity.score;
+    const aiScore = ai.opportunity.score;
+    const score = adjustScoreForEvidence(aiScore, security, wallet);
+    reports["opportunity"] = { ...ai.opportunity, aiScore, score, cappedForMissingEvidence: score < aiScore } as unknown as Json;
     const alertText = formatAlert({
       name: hunter.name ?? "Unknown",
       symbol: hunter.symbol ?? "?",
@@ -140,6 +149,8 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
       bullets: ai.chief.bullets,
       takeaway: ai.chief.takeaway,
       marketCapUsd: market.marketCapUsd,
+      security: security.verdict,
+      holdersVerified: wallet.verified,
     });
     const alert = shouldAlert(score);
     if (alert) await sendTelegram(alertText);

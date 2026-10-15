@@ -1,3 +1,4 @@
+import { computeHolderPcts } from "./rules";
 // Free data sources: DexScreener (discovery + market + socials) and Solana RPC (contract + holders).
 
 export type DexPair = {
@@ -57,7 +58,7 @@ export async function fetchPairs(mints: string[]): Promise<Map<string, DexPair>>
   return out;
 }
 
-function rpcUrls() {
+export function rpcUrls() {
   const custom = process.env["SOLANA_RPC_URL"];
   return [
     ...(custom ? [custom] : []),
@@ -67,22 +68,61 @@ function rpcUrls() {
   ];
 }
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  let lastErr: unknown;
-  for (const url of rpcUrls()) {
+export class RpcError extends Error {
+  constructor(
+    public kind: "timeout" | "blocked" | "rate_limited" | "http" | "rpc" | "network",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** Host only — never log the full URL (custom RPC URLs embed API keys). */
+function safeHost(url: string) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "invalid-url";
+  }
+}
+
+export type RpcOptions = { urls?: string[]; fetchImpl?: typeof fetch; timeoutMs?: number };
+
+export async function rpc<T>(method: string, params: unknown[], opts: RpcOptions = {}): Promise<T> {
+  const urls = opts.urls ?? rpcUrls();
+  const doFetch = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? 8_000;
+  const errors: RpcError[] = [];
+  for (const url of urls) {
+    const host = safeHost(url);
+    const started = Date.now();
     try {
-      const res = await getJson<{ result?: T; error?: { message: string } }>(url, {
+      const res = await doFetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        signal: AbortSignal.timeout(timeoutMs),
       });
-      if (res.error) throw new Error(`RPC ${method}: ${res.error.message}`);
-      return res.result as T;
+      if (!res.ok) {
+        const kind = res.status === 429 ? "rate_limited" : res.status === 403 || res.status === 401 ? "blocked" : "http";
+        throw new RpcError(kind, `HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as { result?: T; error?: { code?: number; message: string } };
+      if (body.error) throw new RpcError(body.error.code === 429 ? "rate_limited" : "rpc", body.error.message.slice(0, 160));
+      return body.result as T;
     } catch (e) {
-      lastErr = e;
+      const err =
+        e instanceof RpcError
+          ? e
+          : e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")
+            ? new RpcError("timeout", `timed out after ${timeoutMs}ms`)
+            : new RpcError("network", e instanceof Error ? e.message.slice(0, 160) : String(e));
+      errors.push(err);
+      console.warn(JSON.stringify({ evt: "rpc_fail", method, host, kind: err.kind, msg: err.message, ms: Date.now() - started }));
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error(`RPC ${method} failed on all endpoints`);
+  const last = errors.at(-1);
+  throw new RpcError(last?.kind ?? "network", `${method} failed on ${urls.length} endpoint(s): ${errors.map((x) => x.kind).join(", ") || "no endpoints"}`);
 }
 
 type ParsedMint = {
@@ -93,58 +133,84 @@ type ParsedMint = {
   extensions?: { extension: string; state?: Record<string, unknown> }[];
 };
 
-const PUMP_DEFAULTS = {
-  mintAuthority: null,
-  freezeAuthority: null,
-  supply: 1_000_000_000,
-  extensions: [] as string[],
-  transferFeeBps: 0,
+export type MintInfo = {
+  mintAuthority: string | null;
+  freezeAuthority: string | null;
+  supply: number;
+  extensions: string[];
+  transferFeeBps: number;
 };
 
-export async function fetchMintInfo(mint: string) {
+/** Real on-chain mint data, or an explicit failure. Never substitutes assumed values. */
+export async function fetchMintInfo(
+  mint: string,
+  opts?: RpcOptions,
+): Promise<{ ok: true; info: MintInfo } | { ok: false; reason: string }> {
   try {
-    return await fetchMintInfoOnChain(mint);
+    const r = await rpc<{ value: { data: { parsed?: { info?: ParsedMint } } } | null }>(
+      "getAccountInfo",
+      [mint, { encoding: "jsonParsed", commitment: "confirmed" }],
+      opts,
+    );
+    const info = r?.value?.data?.parsed?.info;
+    if (!info || typeof info.decimals !== "number" || info.supply === undefined)
+      return { ok: false, reason: "mint account not found or not a parsed SPL mint" };
+    const fee = info.extensions?.find((e) => e.extension === "transferFeeConfig")?.state as
+      | { newerTransferFee?: { transferFeeBasisPoints?: number } }
+      | undefined;
+    return {
+      ok: true,
+      info: {
+        mintAuthority: info.mintAuthority ?? null,
+        freezeAuthority: info.freezeAuthority ?? null,
+        supply: Number(info.supply) / 10 ** info.decimals,
+        extensions: (info.extensions ?? []).map((e) => e.extension),
+        transferFeeBps: fee?.newerTransferFee?.transferFeeBasisPoints ?? 0,
+      },
+    };
   } catch (e) {
-    if (!mint.endsWith("pump")) throw e;
-    console.warn("mint lookup failed, using Pump.fun defaults", mint, e instanceof Error ? e.message : e);
-    return { ...PUMP_DEFAULTS, extensions: [...PUMP_DEFAULTS.extensions] };
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
 }
 
-async function fetchMintInfoOnChain(mint: string) {
-  const r = await rpc<{ value: { data: { parsed: { info: ParsedMint } } } | null }>("getAccountInfo", [
-    mint,
-    { encoding: "jsonParsed" },
-  ]);
-  const info = r.value?.data?.parsed?.info;
-  if (!info) throw new Error("Mint account not found");
-  const exts = (info.extensions ?? []).map((e) => e.extension);
-  const fee = info.extensions?.find((e) => e.extension === "transferFeeConfig")?.state as
-    | { newerTransferFee?: { transferFeeBasisPoints?: number } }
-    | undefined;
-  return {
-    mintAuthority: info.mintAuthority ?? null,
-    freezeAuthority: info.freezeAuthority ?? null,
-    supply: Number(info.supply) / 10 ** info.decimals,
-    extensions: exts,
-    transferFeeBps: fee?.newerTransferFee?.transferFeeBasisPoints ?? 0,
-  };
-}
-
-/** Holder % of supply (largest first), excluding the pool / bonding-curve account. Null if unavailable. */
-export async function fetchHolderPcts(mint: string, supply: number, poolAddress: string): Promise<number[] | null> {
+/** Largest token accounts with resolved owners, pool/bonding curve excluded. Null when the lookup fails. */
+export async function fetchHolderPcts(
+  mint: string,
+  supply: number,
+  poolAddress: string,
+  opts?: RpcOptions,
+): Promise<{ ok: true; holders: { pcts: number[]; excluded: number } } | { ok: false; reason: string }> {
   try {
-    const largest = await rpc<{ value: { address: string; uiAmount: number }[] }>("getTokenLargestAccounts", [mint]);
-    const accts = largest.value.slice(0, 20);
-    const owners = await rpc<{ value: ({ data: { parsed: { info: { owner: string } } } } | null)[] }>(
+    const largest = await rpc<{ value: { address: string; uiAmount: number | null }[] }>(
+      "getTokenLargestAccounts",
+      [mint, { commitment: "confirmed" }],
+      opts,
+    );
+    const accts = (largest?.value ?? []).slice(0, 20);
+    if (!accts.length) return { ok: false, reason: "no token accounts returned" };
+    const owners = await rpc<{ value: ({ data: { parsed?: { info?: { owner?: string } } } } | null)[] }>(
       "getMultipleAccounts",
       [accts.map((a) => a.address), { encoding: "jsonParsed" }],
+      opts,
     );
-    return accts
-      .filter((_, i) => owners.value[i]?.data?.parsed?.info?.owner !== poolAddress)
-      .map((a) => (a.uiAmount / supply) * 100);
+    const holders = computeHolderPcts(
+      accts.map((a, i) => ({
+        address: a.address,
+        uiAmount: a.uiAmount ?? 0,
+        owner: owners?.value?.[i]?.data?.parsed?.info?.owner ?? null,
+      })),
+      supply,
+      [poolAddress, ...KNOWN_PROGRAM_OWNERS],
+    );
+    if (!holders) return { ok: false, reason: "could not resolve all holder owners" };
+    return { ok: true, holders };
   } catch (e) {
-    console.warn("holder lookup failed", mint, e instanceof Error ? e.message : e);
-    return null;
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** Program-owned accounts that hold liquidity, not insider supply. */
+const KNOWN_PROGRAM_OWNERS = [
+  "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg", // Pump.fun migration / fee account
+  "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", // Raydium AMM v4 authority
+];

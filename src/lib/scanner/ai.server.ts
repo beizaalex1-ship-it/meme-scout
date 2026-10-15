@@ -31,7 +31,7 @@ export class AiGatewayError extends Error {
   }
 }
 
-const INSTRUCTIONS = `You run three agents in a Solana Pump.fun meme-coin research pipeline. Use ONLY the evidence provided; never invent data.
+const INSTRUCTIONS = `You run three agents in a Solana Pump.fun meme-coin research pipeline. Use ONLY the evidence provided; never invent data. If security.verdict is UNVERIFIED or wallet.verified is false, say so plainly, treat it as a major risk, and never describe the token as safe or security-approved.
 
 Agent 3 — Social Intelligence: from the token's name, description, listed website/X/Telegram links and DexScreener boost/profile status, judge narrative strength. Free sources only: no live X search is available, so missing socials lower the score and say "unclear" when you can't tell organic from automated. Score 1-10 and write a 2-sentence narrative summary.
 
