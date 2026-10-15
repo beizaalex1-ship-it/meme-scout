@@ -19,7 +19,13 @@ export type DexPair = {
 export type TokenProfile = { tokenAddress: string; chainId: string; description?: string };
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  let res = await fetch(url, init);
+  // Free APIs rate-limit shared cloud IPs: back off briefly on 429 (2s, then 5s).
+  for (const wait of [2000, 5000]) {
+    if (res.status !== 429) break;
+    await new Promise((r) => setTimeout(r, wait));
+    res = await fetch(url, init);
+  }
   if (!res.ok) throw new Error(`${url} failed [${res.status}]: ${(await res.text()).slice(0, 200)}`);
   return (await res.json()) as T;
 }
