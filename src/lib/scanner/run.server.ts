@@ -2,7 +2,7 @@ import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
-import { discoverPumpMints, resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfo, fetchPairs, type DexPair } from "./data.server";
+import { discoverPumpMints, resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair } from "./data.server";
 import {
   adjustScoreForEvidence,
   analyzeMarket,
@@ -15,6 +15,7 @@ import {
 } from "./rules";
 import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
+import { planCandidates } from "./optimizer";
 
 export const DEFAULT_MAX_COINS_PER_RUN = 3;
 
@@ -28,6 +29,7 @@ export async function runScan(): Promise<string> {
 
   let summary = "";
   let analyzedCount = 0;
+  const opt = { earlyRejected: 0, skippedUnverified: 0, holderRejected: 0 };
   const maxCoins = Math.min(10, Math.max(1, state?.max_coins_per_run ?? DEFAULT_MAX_COINS_PER_RUN));
   resetRpcUsage();
   try {
@@ -38,7 +40,7 @@ export async function runScan(): Promise<string> {
     const fresh = found.filter((f) => !knownSet.has(f.mint));
     const pairs = await fetchPairs(fresh.map((f) => f.mint));
 
-    const candidates = fresh
+    const prelim = fresh
       .map((f) => ({ ...f, pair: pairs.get(f.mint) }))
       .filter((c): c is typeof c & { pair: DexPair } => !!c.pair)
       // "made well": real early trading activity, plus a bonus for listed website/socials
@@ -49,7 +51,36 @@ export async function runScan(): Promise<string> {
       })
       .filter((c) => (c.pair.txns?.["m5"]?.buys ?? 0) >= 3)
       .sort((x, y) => y.quality - x.quality)
-      .slice(0, maxCoins);
+      .slice(0, 30);
+
+    // Credits optimizer: one batched Helius request checks every candidate's mint, then only
+    // coins with verified PASS safety data get the expensive holder/forensics/AI checks.
+    const mintInfo = await fetchMintInfoBatch(prelim.map((c) => c.mint));
+    const withSec = prelim.map((c) => {
+      const m: MintResult = mintInfo.get(c.mint) ?? { ok: false, reason: "not returned" };
+      const security = m.ok ? analyzeSecurity({ ...m.info, dexId: c.pair.dexId }, c.pair.dexId) : analyzeSecurity(null, c.pair.dexId, m.reason);
+      return { ...c, mintRes: m, security };
+    });
+    const plan = planCandidates(withSec.map((c) => ({ item: c, quality: c.quality, security: c.security })), maxCoins);
+    opt.skippedUnverified = plan.skippedUnverified.length;
+    if (plan.earlyReject.length) {
+      const { data: ins } = await db
+        .from("scanned_tokens")
+        .upsert(
+          plan.earlyReject.map((c) => ({
+            mint: c.mint,
+            name: c.pair.baseToken.name || null,
+            symbol: c.pair.baseToken.symbol || null,
+            status: "rejected",
+            verdict: `REJECTED DUE TO RISK: ${c.security.flags[0]}`,
+            reports: JSON.parse(JSON.stringify({ security: c.security, optimizer: "Rejected on the first Helius check; no further credits spent" })),
+          })),
+          { onConflict: "mint", ignoreDuplicates: true },
+        )
+        .select("mint");
+      opt.earlyRejected = ins?.length ?? 0;
+    }
+    const candidates = plan.analyze;
 
     // Atomically claim candidates: only mints this run inserted are analysed, so an overlapping
     // run (e.g. after lock expiry) can never alert the same coin twice.
@@ -69,21 +100,25 @@ export async function runScan(): Promise<string> {
     let rejected = 0;
     for (const c of candidates.filter((x) => claimedSet.has(x.mint))) {
       analyzedCount++;
-      const outcome = await analyzeToken(c.mint, c.pair, c.description);
+      const outcome = await analyzeToken(c.mint, c.pair, c.mintRes, c.description);
+      if (outcome === "holder_rejected") opt.holderRejected++;
       if (outcome === "paused") {
         summary = "Paused after AI access error";
         return summary;
       }
       if (outcome === "alerted") alerted++;
-      if (outcome === "rejected") rejected++;
+      if (outcome === "rejected" || outcome === "holder_rejected") rejected++;
     }
-    summary = `Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected}, alerted ${alerted}`;
+    summary = `Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}`;
     return summary;
   } finally {
     await db.from("scan_runs").insert({
       coins_checked: analyzedCount,
       rpc_calls: rpcUsage.total,
       calls_by_method: { ...rpcUsage.byMethod },
+      early_rejected: opt.earlyRejected,
+      skipped_unverified: opt.skippedUnverified,
+      holder_rejected: opt.holderRejected,
       summary: summary || null,
     });
     await db
@@ -93,7 +128,7 @@ export async function runScan(): Promise<string> {
   }
 }
 
-async function analyzeToken(mint: string, pair: DexPair, description?: string) {
+async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, description?: string) {
   const db = supabaseAdmin;
   const hunter: CoinHunterReport = {
     name: pair.baseToken.name || null,
@@ -121,13 +156,28 @@ async function analyzeToken(mint: string, pair: DexPair, description?: string) {
       sellsH1: t["h1"]?.sells ?? 0,
       priceChangeH1: pair.priceChange?.["h1"] ?? null,
     });
-    const mintRes = await fetchMintInfo(mint);
     const security = mintRes.ok
       ? analyzeSecurity({ ...mintRes.info, dexId: pair.dexId }, pair.dexId)
       : analyzeSecurity(null, pair.dexId, mintRes.reason);
     const holderRes = mintRes.ok
       ? await fetchHolderPcts(mint, mintRes.info.supply, pair.pairAddress)
       : { ok: false as const, reason: "mint supply unknown" };
+    // Cheap holder check first: verified high concentration rejects before ~30-credit forensics.
+    if (holderRes.ok) {
+      const quick = analyzeWallets(holderRes.holders);
+      if (quick.risk === "High Risk") {
+        await db
+          .from("scanned_tokens")
+          .update({
+            status: "rejected",
+            verdict: `REJECTED DUE TO RISK: ${quick.flags.find((f) => f.startsWith("RED"))}`,
+            reports: JSON.parse(JSON.stringify({ hunter, market, wallet: quick, security, optimizer: "Rejected on holder check; wallet forensics skipped to save credits" })),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("mint", mint);
+        return "holder_rejected";
+      }
+    }
     const forensics = await investigateWallets(mint, mintRes.ok ? mintRes.info.supply : 0, [pair.pairAddress]);
     if (forensics.creator.status === "VERIFIED") hunter.creatorWallet = forensics.creator.wallet;
     else hunter.missing.push(`Developer Wallet (UNVERIFIED: ${forensics.creator.evidence})`);
