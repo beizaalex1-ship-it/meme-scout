@@ -27,6 +27,11 @@ async function getJson<T>(url: string): Promise<T> {
 
 /** Brand-new Pump.fun launches (GeckoTerminal new pools), newest first, within maxAgeMin. */
 export async function discoverPumpMints(maxAgeMin = 10): Promise<{ mint: string; description: string | undefined }[]> {
+  return (await discoverGecko(maxAgeMin)).mints;
+}
+
+/** ok=false when the first page failed (provider unavailable / rate-limited). */
+export async function discoverGecko(maxAgeMin = 10): Promise<{ ok: boolean; error: string | null; mints: { mint: string; description: string | undefined }[] }> {
   type Pool = { attributes: { pool_created_at: string }; relationships: { dex: { data: { id: string } }; base_token: { data: { id: string } } } };
   // Sequential pages; stop at the first failure so a limiting provider isn't hit again.
   const pages: PromiseSettledResult<{ data: Pool[] }>[] = [];
@@ -51,7 +56,8 @@ export async function discoverPumpMints(maxAgeMin = 10): Promise<{ mint: string;
       seen.add(mint);
     }
   }
-  return [...seen].map((mint) => ({ mint, description: undefined }));
+  const ok = pages[0]?.status === "fulfilled";
+  return { ok, error: ok ? null : (failed[0] ?? "unknown"), mints: [...seen].map((mint) => ({ mint, description: undefined })) };
 }
 
 /** Best (highest-liquidity / pump) pair per mint. */
