@@ -28,7 +28,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
     <main className="flex min-h-screen items-center justify-center bg-background p-6 text-center text-foreground">
       <div>
         <h1 className="text-xl font-semibold">No access</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{String(error?.message ?? "").includes("Forbidden") ? "This account is not allowed to use the scanner." : "The dashboard couldn't load."}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{String((error as Error)?.message ?? "").includes("Forbidden") ? "This account is not allowed to use the scanner." : "The dashboard couldn't load."}</p>
         <button onClick={() => supabase.auth.signOut()} className="mt-4 rounded-md border border-border px-4 py-2 text-sm">Sign out</button>
       </div>
     </main>
