@@ -44,7 +44,7 @@ export function b58encode(b: Uint8Array): string {
 
 function isOnCurve(b: Uint8Array) {
   try {
-    ed25519.Point.fromHex(b);
+    ed25519.Point.fromBytes(b);
     return true;
   } catch {
     return false;
