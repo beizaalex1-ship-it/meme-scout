@@ -13,3 +13,4 @@
 - [ ] Step 3: Chief/scoring upgrades (confidence separate from score)
 - [ ] Step 4: evaluation report
 - [ ] Coin discovery blocked by GeckoTerminal on published server — waiting on user choice (Helius fallback vs paid API)
+- [ ] Create owner account + admin role (needs owner email)
