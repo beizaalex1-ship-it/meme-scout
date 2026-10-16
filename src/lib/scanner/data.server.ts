@@ -38,6 +38,8 @@ export async function discoverPumpMints(maxAgeMin = 10): Promise<{ mint: string;
   );
   const cutoff = Date.now() - maxAgeMin * 60_000;
   const seen = new Set<string>();
+  const failed = pages.filter((p) => p.status === "rejected").map((p) => String((p as PromiseRejectedResult).reason).slice(0, 120));
+  if (failed.length) console.error(JSON.stringify({ evt: "discovery_failed", pages: failed.length, error: failed[0] }));
   for (const pg of pages) {
     if (pg.status !== "fulfilled") continue;
     for (const pool of pg.value.data ?? []) {

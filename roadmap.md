@@ -12,3 +12,4 @@
 - [ ] Step 2: time-based market features
 - [ ] Step 3: Chief/scoring upgrades (confidence separate from score)
 - [ ] Step 4: evaluation report
+- [ ] Discovery returns 0 coins on the published server since ~02:30 UTC (likely GeckoTerminal rate limit) — logging added
