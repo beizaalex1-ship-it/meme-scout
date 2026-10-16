@@ -9,12 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as ApiPublicJobsScanRouteImport } from './routes/api/public/jobs/scan'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
+  id: '/_authenticated/dashboard',
+  path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicJobsScanRoute = ApiPublicJobsScanRouteImport.update({
@@ -24,38 +24,38 @@ const ApiPublicJobsScanRoute = ApiPublicJobsScanRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
+  '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/public/jobs/scan': typeof ApiPublicJobsScanRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
+  '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/public/jobs/scan': typeof ApiPublicJobsScanRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
+  '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/public/jobs/scan': typeof ApiPublicJobsScanRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/public/jobs/scan'
+  fullPaths: '/dashboard' | '/api/public/jobs/scan'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/public/jobs/scan'
-  id: '__root__' | '/' | '/api/public/jobs/scan'
+  to: '/dashboard' | '/api/public/jobs/scan'
+  id: '__root__' | '/_authenticated/dashboard' | '/api/public/jobs/scan'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
+  AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   ApiPublicJobsScanRoute: typeof ApiPublicJobsScanRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/_authenticated/dashboard': {
+      id: '/_authenticated/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/jobs/scan': {
@@ -69,7 +69,7 @@ declare module '@tanstack/react-router' {
 }
 
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
+  AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   ApiPublicJobsScanRoute: ApiPublicJobsScanRoute,
 }
 export const routeTree = rootRouteImport
