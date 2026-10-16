@@ -36,6 +36,13 @@
       "when": 1792128574262,
       "tag": "0004_lock_scanner_tables_server_only",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792129558337,
+      "tag": "0005_helius_discovery_and_admin_auth",
+      "breakpoints": true
     }
   ]
 }

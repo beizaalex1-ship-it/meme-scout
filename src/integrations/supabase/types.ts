@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      helius_launches: {
+        Row: {
+          block_time: string | null
+          created_at: string
+          mint: string | null
+          signature: string
+          status: string
+        }
+        Insert: {
+          block_time?: string | null
+          created_at?: string
+          mint?: string | null
+          signature: string
+          status: string
+        }
+        Update: {
+          block_time?: string | null
+          created_at?: string
+          mint?: string | null
+          signature?: string
+          status?: string
+        }
+        Relationships: []
+      }
       prediction_observations: {
         Row: {
           checkpoint: string
@@ -134,9 +158,15 @@ export type Database = {
         Row: {
           calls_by_method: Json
           coins_checked: number
+          discovery_credits: number | null
+          discovery_failures: number | null
+          discovery_note: string | null
+          discovery_provider: string | null
           early_rejected: number
           holder_rejected: number
           id: string
+          launches_eligible: number | null
+          launches_retrieved: number | null
           rpc_calls: number
           run_at: string
           skipped_unverified: number
@@ -145,9 +175,15 @@ export type Database = {
         Insert: {
           calls_by_method?: Json
           coins_checked?: number
+          discovery_credits?: number | null
+          discovery_failures?: number | null
+          discovery_note?: string | null
+          discovery_provider?: string | null
           early_rejected?: number
           holder_rejected?: number
           id?: string
+          launches_eligible?: number | null
+          launches_retrieved?: number | null
           rpc_calls?: number
           run_at?: string
           skipped_unverified?: number
@@ -156,9 +192,15 @@ export type Database = {
         Update: {
           calls_by_method?: Json
           coins_checked?: number
+          discovery_credits?: number | null
+          discovery_failures?: number | null
+          discovery_note?: string | null
+          discovery_provider?: string | null
           early_rejected?: number
           holder_rejected?: number
           id?: string
+          launches_eligible?: number | null
+          launches_retrieved?: number | null
           rpc_calls?: number
           run_at?: string
           skipped_unverified?: number
@@ -210,6 +252,8 @@ export type Database = {
       }
       scanner_state: {
         Row: {
+          helius_discovery_max_tx: number
+          helius_monthly_budget: number
           id: number
           last_run_at: string | null
           last_run_summary: string | null
@@ -218,6 +262,8 @@ export type Database = {
           paused_reason: string | null
         }
         Insert: {
+          helius_discovery_max_tx?: number
+          helius_monthly_budget?: number
           id?: number
           last_run_at?: string | null
           last_run_summary?: string | null
@@ -226,6 +272,8 @@ export type Database = {
           paused_reason?: string | null
         }
         Update: {
+          helius_discovery_max_tx?: number
+          helius_monthly_budget?: number
           id?: number
           last_run_at?: string | null
           last_run_summary?: string | null
@@ -235,15 +283,40 @@ export type Database = {
         }
         Relationships: []
       }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
       acquire_scanner_lock: { Args: { _seconds: number }; Returns: boolean }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "moderator" | "user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -370,6 +443,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "moderator", "user"],
+    },
   },
 } as const
