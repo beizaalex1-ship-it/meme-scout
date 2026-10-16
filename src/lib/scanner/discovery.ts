@@ -49,7 +49,7 @@ export function selectSignatures(sigs: RawSig[], seen: Set<string>, nowSec: numb
 /** How many transaction lookups this scan may spend without touching the reserve or the monthly budget. */
 export function planHeliusBudget(p: { monthlyBudget: number; usedThisMonth: number; maxCoins: number; maxTx: number }) {
   const reserve = p.maxCoins * RESERVE_PER_COIN;
-  const left = p.monthlyBudget - p.usedThisMonth - reserve - 1; // 1 = signature listing
+  const left = p.monthlyBudget - p.usedThisMonth - reserve - 2; // 1 signature listing + 1 batched mint check
   if (p.maxTx <= 0) return { allowedTx: 0, reason: "Helius discovery disabled (limit 0)" };
   if (left <= 0) return { allowedTx: 0, reason: `Monthly budget reached (${p.usedThisMonth.toLocaleString("en-US")} of ${p.monthlyBudget.toLocaleString("en-US")} used, ${reserve} reserved for checks)` };
   return { allowedTx: Math.min(p.maxTx, left), reason: null as string | null };

@@ -19,9 +19,9 @@ describe("shared Helius budget", () => {
   });
 
   it("discovery leaves the reserve for wallet/safety checks", () => {
-    // 200 credits left, 3 coins need 105 reserved: discovery may use at most 94.
+    // 200 credits left, 3 coins need 105 reserved: discovery may use at most 93.
     const d = planHeliusBudget({ monthlyBudget: 1000, usedThisMonth: 800, maxCoins: 3, maxTx: 500 });
-    expect(d.allowedTx).toBe(1000 - 800 - 3 * RESERVE_PER_COIN - 1);
+    expect(d.allowedTx).toBe(1000 - 800 - 3 * RESERVE_PER_COIN - 2);
     // After discovery spends that, all 3 coins are still affordable.
     expect(affordableCoins(200, 1 + d.allowedTx, 3)).toBe(3);
   });
