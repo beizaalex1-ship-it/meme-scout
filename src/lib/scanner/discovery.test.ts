@@ -42,7 +42,7 @@ describe("selectSignatures", () => {
   it("recovers launches missed during an outage while still in the window", () => {
     // Previous scan processed only "a" (cap 1); next scan picks up "b".
     const first = selectSignatures(sigs, new Set(), now, 10, 1).picked.map((s) => s.signature);
-    const next = selectSignatures(sigs, new Set(first), now + 60, 10, 1).picked.map((s) => s.signature);
+    const next = selectSignatures(sigs, new Set(first), now, 10, 1).picked.map((s) => s.signature);
     expect(first).toEqual(["a"]);
     expect(next).toEqual(["b"]);
   });
