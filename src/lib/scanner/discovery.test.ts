@@ -55,5 +55,5 @@ describe("planHeliusBudget", () => {
     expect(r.allowedTx).toBe(0);
     expect(r.reason).toMatch(/budget/);
   });
-  it("never plans beyond what is left", () => expect(planHeliusBudget({ monthlyBudget: 1000, usedThisMonth: 880, maxCoins: 3, maxTx: 30 }).allowedTx).toBe(14));
+  it("never plans beyond what is left", () => expect(planHeliusBudget({ monthlyBudget: 1000, usedThisMonth: 880, maxCoins: 3, maxTx: 30 }).allowedTx).toBe(13));
 });

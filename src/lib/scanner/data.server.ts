@@ -83,7 +83,7 @@ export function rpcUrls(): string[] {
 
 export class RpcError extends Error {
   constructor(
-    public kind: "timeout" | "blocked" | "rate_limited" | "http" | "rpc" | "network",
+    public kind: "timeout" | "blocked" | "rate_limited" | "http" | "rpc" | "network" | "budget",
     message: string,
   ) {
     super(message);
@@ -112,6 +112,13 @@ export type RpcOptions = {
 
 /** Requests sent to the RPC provider (each attempt counts; Helius bills ~1 credit per standard call). */
 export const rpcUsage = { total: 0, byMethod: {} as Record<string, number> };
+/** Shared Helius budget guard for this scan: max attempts allowed (null = unlimited). Applies to every rpc() call. */
+export const rpcBudget = { limit: null as number | null, skipped: 0, byMethod: {} as Record<string, number> };
+export function setRpcBudget(limit: number | null) {
+  rpcBudget.limit = limit;
+  rpcBudget.skipped = 0;
+  rpcBudget.byMethod = {};
+}
 export function resetRpcUsage() {
   rpcUsage.total = 0;
   rpcUsage.byMethod = {};
@@ -147,12 +154,19 @@ export async function rpc<T>(method: string, params: unknown[], opts: RpcOptions
   const baseDelayMs = opts.baseDelayMs ?? 300;
   const minIntervalMs = opts.minIntervalMs ?? (opts.fetchImpl ? 0 : 110);
   const errors: RpcError[] = [];
+  if (rpcBudget.limit !== null && rpcUsage.total >= rpcBudget.limit) {
+    if (rpcBudget.skipped === 0) console.warn(JSON.stringify({ evt: "helius_budget_skip", method, spent: rpcUsage.total, limit: rpcBudget.limit }));
+    rpcBudget.skipped++;
+    rpcBudget.byMethod[method] = (rpcBudget.byMethod[method] ?? 0) + 1;
+    throw new RpcError("budget", `${method} skipped: Helius budget reached`);
+  }
   for (const url of urls) {
     const host = safeHost(url);
     for (let attempt = 0; attempt <= retries; attempt++) {
       const started = Date.now();
       let retryAfter: string | null = null;
       try {
+        if (rpcBudget.limit !== null && rpcUsage.total >= rpcBudget.limit) throw new RpcError("budget", `${method} stopped: Helius budget reached`);
         await pace(minIntervalMs);
         rpcUsage.total++;
         rpcUsage.byMethod[method] = (rpcUsage.byMethod[method] ?? 0) + 1;
