@@ -29,6 +29,13 @@
       "when": 1792104863609,
       "tag": "0003_prediction_outcomes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792128574262,
+      "tag": "0004_lock_scanner_tables_server_only",
+      "breakpoints": true
     }
   ]
 }
