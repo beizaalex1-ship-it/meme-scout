@@ -1,16 +1,17 @@
+import { requireAdmin } from "@/lib/admin-middleware";
 import { createServerFn } from "@tanstack/react-start";
 
-export const getDashboard = createServerFn({ method: "GET" }).handler(async () => {
+export const getDashboard = createServerFn({ method: "GET" }).middleware([requireAdmin]).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
   const [{ data: state }, { data: tokens }, { data: runs }, { data: preds }] = await Promise.all([
-    supabaseAdmin.from("scanner_state").select("paused_reason,last_run_at,last_run_summary,max_coins_per_run").eq("id", 1).single(),
+    supabaseAdmin.from("scanner_state").select("paused_reason,last_run_at,last_run_summary,max_coins_per_run,helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single(),
     supabaseAdmin
       .from("scanned_tokens")
       .select("mint,name,symbol,status,score,verdict,reports,alert_text,error,created_at")
       .order("created_at", { ascending: false })
       .limit(50),
-    supabaseAdmin.from("scan_runs").select("run_at,coins_checked,rpc_calls,early_rejected,skipped_unverified,holder_rejected").gte("run_at", since).order("run_at", { ascending: false }).limit(400),
+    supabaseAdmin.from("scan_runs").select("run_at,coins_checked,rpc_calls,early_rejected,skipped_unverified,holder_rejected,discovery_provider,launches_retrieved,launches_eligible,discovery_failures,discovery_credits,discovery_note").gte("run_at", since).order("run_at", { ascending: false }).limit(400),
     supabaseAdmin
       .from("predictions")
       .select("id,mint,name,symbol,detected_at,status,score,wallet_risk,security_verdict,initial_price_usd,prediction_observations(checkpoint,status,observed_at,price_usd,price_change_pct,reason)")
@@ -27,7 +28,7 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
 });
 
 let lastTest = 0;
-export const sendTestAlert = createServerFn({ method: "POST" }).handler(async () => {
+export const sendTestAlert = createServerFn({ method: "POST" }).middleware([requireAdmin]).handler(async () => {
   if (Date.now() - lastTest < 15_000) return { ok: false, error: "Please wait a few seconds between tests." };
   lastTest = Date.now();
   const { formatAlert } = await import("./alert");
@@ -56,14 +57,14 @@ export const sendTestAlert = createServerFn({ method: "POST" }).handler(async ()
   }
 });
 
-export const resumeScanner = createServerFn({ method: "POST" }).handler(async () => {
+export const resumeScanner = createServerFn({ method: "POST" }).middleware([requireAdmin]).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   await supabaseAdmin.from("scanner_state").update({ paused_reason: null }).eq("id", 1);
   return { ok: true };
 });
 
 let lastManual = 0;
-export const scanNow = createServerFn({ method: "POST" }).handler(async () => {
+export const scanNow = createServerFn({ method: "POST" }).middleware([requireAdmin]).handler(async () => {
   if (Date.now() - lastManual < 30_000) return { ok: false, summary: "Please wait 30 seconds between manual scans." };
   lastManual = Date.now();
   try {
@@ -76,7 +77,7 @@ export const scanNow = createServerFn({ method: "POST" }).handler(async () => {
   }
 });
 
-export type RunRow = { run_at: string; coins_checked: number; rpc_calls: number; early_rejected?: number; skipped_unverified?: number; holder_rejected?: number };
+export type RunRow = { run_at: string; coins_checked: number; rpc_calls: number; discovery_provider?: string | null; launches_retrieved?: number | null; launches_eligible?: number | null; discovery_failures?: number | null; discovery_credits?: number | null; discovery_note?: string | null; early_rejected?: number; skipped_unverified?: number; holder_rejected?: number };
 /** Approx. credits a full check costs (holders + forensics), used to estimate savings. */
 export const FULL_CHECK_CREDITS = 30;
 /** Estimated Helius credits (≈1 per standard RPC call). */
@@ -102,6 +103,7 @@ export function summarizeCredits(runs: RunRow[]) {
 }
 
 export const setMaxCoins = createServerFn({ method: "POST" })
+  .middleware([requireAdmin])
   .inputValidator((d: { value: number }) => {
     const v = Math.round(Number(d.value));
     if (!Number.isFinite(v) || v < 1 || v > 10) throw new Error("Choose between 1 and 10 coins");
@@ -110,5 +112,20 @@ export const setMaxCoins = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     await supabaseAdmin.from("scanner_state").update({ max_coins_per_run: data.value }).eq("id", 1);
+    return { ok: true };
+  });
+
+export const setHeliusLimits = createServerFn({ method: "POST" })
+  .middleware([requireAdmin])
+  .inputValidator((d: { monthlyBudget: number; maxTx: number }) => {
+    const b = Math.round(Number(d.monthlyBudget));
+    const t = Math.round(Number(d.maxTx));
+    if (!Number.isFinite(b) || b < 1000 || b > 100_000_000) throw new Error("Monthly budget must be 1,000–100,000,000");
+    if (!Number.isFinite(t) || t < 0 || t > 100) throw new Error("Per-scan discovery limit must be 0–100");
+    return { monthlyBudget: b, maxTx: t };
+  })
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    await supabaseAdmin.from("scanner_state").update({ helius_monthly_budget: data.monthlyBudget, helius_discovery_max_tx: data.maxTx }).eq("id", 1);
     return { ok: true };
   });
