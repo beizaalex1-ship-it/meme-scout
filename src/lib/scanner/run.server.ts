@@ -2,7 +2,7 @@ import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
-import { discoverPumpMints, resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
+import { resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
 import {
   adjustScoreForEvidence,
   analyzeMarket,
@@ -16,6 +16,7 @@ import {
 import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
 import { planCandidates } from "./optimizer";
+import { discoverLaunches, type DiscoveryResult } from "./discovery.server";
 import { predictionMarket, recordPrediction } from "./outcomes.server";
 
 export const DEFAULT_MAX_COINS_PER_RUN = 3;
@@ -33,11 +34,17 @@ export async function runScan(): Promise<string> {
   const opt = { earlyRejected: 0, skippedUnverified: 0, holderRejected: 0 };
   const maxCoins = Math.min(10, Math.max(1, state?.max_coins_per_run ?? DEFAULT_MAX_COINS_PER_RUN));
   resetRpcUsage();
+  let disc: DiscoveryResult | null = null;
   try {
-    const found = await discoverPumpMints(MAX_LAUNCH_AGE_MIN);
+    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins);
+    const found = disc.found;
     const mints = found.map((f) => f.mint);
-    const { data: known } = await db.from("scanned_tokens").select("mint").in("mint", mints.length ? mints : ["-"]);
-    const knownSet = new Set((known ?? []).map((k) => k.mint));
+    const inList = mints.length ? mints : ["-"];
+    const [{ data: known }, { data: knownPred }] = await Promise.all([
+      db.from("scanned_tokens").select("mint").in("mint", inList),
+      db.from("predictions").select("mint").in("mint", inList),
+    ]);
+    const knownSet = new Set([...(known ?? []), ...(knownPred ?? [])].map((k) => k.mint));
     const fresh = found.filter((f) => !knownSet.has(f.mint));
     // A market-data failure ends this scan's candidate list, not the scan itself.
     let pairs = new Map<string, DexPair>();
@@ -126,7 +133,7 @@ export async function runScan(): Promise<string> {
       if (outcome === "alerted") alerted++;
       if (outcome === "rejected" || outcome === "holder_rejected") rejected++;
     }
-    summary = `Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — market data unavailable, ${fresh.length} coins left for next scan` : ""}`;
+    summary = `[${disc.provider}${disc.provider === "helius" ? `: ${disc.retrieved} launches read, ${disc.credits} credits` : ""}] Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — market data unavailable, ${fresh.length} coins left for next scan` : ""}`;
     return summary;
   } finally {
     await db.from("scan_runs").insert({
@@ -137,6 +144,12 @@ export async function runScan(): Promise<string> {
       skipped_unverified: opt.skippedUnverified,
       holder_rejected: opt.holderRejected,
       summary: summary || null,
+      discovery_provider: disc?.provider ?? null,
+      launches_retrieved: disc?.retrieved ?? null,
+      launches_eligible: disc?.eligible ?? null,
+      discovery_failures: disc?.failures ?? null,
+      discovery_credits: disc?.credits ?? null,
+      discovery_note: disc?.note ?? null,
     });
     await db
       .from("scanner_state")
