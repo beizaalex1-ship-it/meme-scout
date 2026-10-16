@@ -14,3 +14,4 @@
 - [ ] Step 4: evaluation report
 - [ ] Coin discovery blocked by GeckoTerminal on published server — waiting on user choice (Helius fallback vs paid API)
 - [ ] Create owner account + admin role (needs owner email)
+- [ ] Recommendation-quality audit (root causes + evidence) — in progress; fixes wait for user review
