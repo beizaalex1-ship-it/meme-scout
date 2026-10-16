@@ -54,3 +54,8 @@ export function planHeliusBudget(p: { monthlyBudget: number; usedThisMonth: numb
   if (left <= 0) return { allowedTx: 0, reason: `Monthly budget reached (${p.usedThisMonth.toLocaleString("en-US")} of ${p.monthlyBudget.toLocaleString("en-US")} used, ${reserve} reserved for checks)` };
   return { allowedTx: Math.min(p.maxTx, left), reason: null as string | null };
 }
+
+/** Coins this scan can still afford full checks for (1 credit kept for the batched mint check). */
+export function affordableCoins(allowance: number, spent: number, maxCoins: number) {
+  return Math.max(0, Math.min(maxCoins, Math.floor((allowance - spent - 1) / RESERVE_PER_COIN)));
+}

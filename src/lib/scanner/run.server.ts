@@ -2,7 +2,7 @@ import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
-import { resetRpcUsage, rpcUsage, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
+import { resetRpcUsage, rpcUsage, rpcBudget, setRpcBudget, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
 import {
   adjustScoreForEvidence,
   analyzeMarket,
@@ -16,7 +16,8 @@ import {
 import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
 import { planCandidates } from "./optimizer";
-import { discoverLaunches, type DiscoveryResult } from "./discovery.server";
+import { discoverLaunches, loadHeliusBudget, type DiscoveryResult } from "./discovery.server";
+import { affordableCoins } from "./discovery";
 import { predictionMarket, recordPrediction } from "./outcomes.server";
 
 export const DEFAULT_MAX_COINS_PER_RUN = 3;
@@ -35,8 +36,13 @@ export async function runScan(): Promise<string> {
   const maxCoins = Math.min(10, Math.max(1, state?.max_coins_per_run ?? DEFAULT_MAX_COINS_PER_RUN));
   resetRpcUsage();
   let disc: DiscoveryResult | null = null;
+  let budgetNote = "";
   try {
-    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins);
+    // One shared guard for every Helius call this scan (discovery, safety, holders, wallet forensics).
+    const hb = await loadHeliusBudget();
+    const allowance = Math.max(0, hb.monthlyBudget - hb.usedThisMonth);
+    setRpcBudget(allowance);
+    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins, hb);
     const found = disc.found;
     const mints = found.map((f) => f.mint);
     const inList = mints.length ? mints : ["-"];
@@ -77,7 +83,12 @@ export async function runScan(): Promise<string> {
       const security = m.ok ? analyzeSecurity({ ...m.info, dexId: c.pair.dexId }, c.pair.dexId) : analyzeSecurity(null, c.pair.dexId, m.reason);
       return { ...c, mintRes: m, security };
     });
-    const plan = planCandidates(withSec.map((c) => ({ item: c, quality: c.quality, security: c.security })), maxCoins);
+    const coinsCap = affordableCoins(allowance, rpcUsage.total, maxCoins);
+    if (coinsCap < maxCoins) {
+      budgetNote = `Helius budget: only ${coinsCap} of ${maxCoins} coins affordable (${(allowance - rpcUsage.total).toLocaleString("en-US")} credits left this month)`;
+      console.warn(JSON.stringify({ evt: "helius_budget_limit", coinsCap, maxCoins, left: allowance - rpcUsage.total }));
+    }
+    const plan = planCandidates(withSec.map((c) => ({ item: c, quality: c.quality, security: c.security })), coinsCap);
     opt.skippedUnverified = plan.skippedUnverified.length;
     if (plan.earlyReject.length) {
       const { data: ins } = await db
@@ -133,9 +144,11 @@ export async function runScan(): Promise<string> {
       if (outcome === "alerted") alerted++;
       if (outcome === "rejected" || outcome === "holder_rejected") rejected++;
     }
-    summary = `[${disc.provider}${disc.provider === "helius" ? `: ${disc.retrieved} launches read, ${disc.credits} credits` : ""}] Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — market data unavailable, ${fresh.length} coins left for next scan` : ""}`;
+    summary = `[${disc.provider}${disc.provider === "helius" ? `: ${disc.retrieved} launches read, ${disc.credits} credits` : ""}] Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — market data unavailable, ${fresh.length} coins left for next scan` : ""}${budgetNote ? ` — ${budgetNote}` : ""}${rpcBudget.skipped ? ` — ${rpcBudget.skipped} Helius checks skipped (budget), marked UNVERIFIED` : ""}`;
     return summary;
   } finally {
+    if (rpcBudget.skipped) console.warn(JSON.stringify({ evt: "helius_budget_summary", skipped: rpcBudget.skipped, byMethod: rpcBudget.byMethod }));
+    setRpcBudget(null);
     await db.from("scan_runs").insert({
       coins_checked: analyzedCount,
       rpc_calls: rpcUsage.total,
@@ -149,7 +162,7 @@ export async function runScan(): Promise<string> {
       launches_eligible: disc?.eligible ?? null,
       discovery_failures: disc?.failures ?? null,
       discovery_credits: disc?.credits ?? null,
-      discovery_note: disc?.note ?? null,
+      discovery_note: [disc?.note, budgetNote, rpcBudget.skipped ? `${rpcBudget.skipped} Helius calls blocked by budget: ${JSON.stringify(rpcBudget.byMethod)}` : ""].filter(Boolean).join("; ") || null,
     });
     await db
       .from("scanner_state")

@@ -2,6 +2,21 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { discoverGecko, rpc, rpcUsage } from "./data.server";
 import { extractLaunchMint, planHeliusBudget, PUMP_LAUNCH_AUTHORITY, selectSignatures, SIGNATURE_LIMIT, type RawLaunchTx, type RawSig } from "./discovery";
 
+export async function loadHeliusBudget() {
+  const db = supabaseAdmin;
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const [{ data: state }, { data: runs }] = await Promise.all([
+    db.from("scanner_state").select("helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single(),
+    db.from("scan_runs").select("rpc_calls").gte("run_at", monthStart).limit(10000),
+  ]);
+  return {
+    monthlyBudget: state?.helius_monthly_budget ?? 1_000_000,
+    usedThisMonth: (runs ?? []).reduce((a, r) => a + (r.rpc_calls ?? 0), 0),
+    maxTx: state?.helius_discovery_max_tx ?? 30,
+  };
+}
+
 export type DiscoveryResult = {
   found: { mint: string; description: string | undefined }[];
   provider: "geckoterminal" | "helius" | "none";
@@ -13,18 +28,13 @@ export type DiscoveryResult = {
 };
 
 /** GeckoTerminal first (free). Helius launch-account fallback only when GeckoTerminal is unavailable. */
-export async function discoverLaunches(maxAgeMin: number, maxCoins: number): Promise<DiscoveryResult> {
+export async function discoverLaunches(maxAgeMin: number, maxCoins: number, budgetIn?: { monthlyBudget: number; usedThisMonth: number; maxTx: number }): Promise<DiscoveryResult> {
   const g = await discoverGecko(maxAgeMin);
   if (g.ok) return { found: g.mints, provider: "geckoterminal", retrieved: g.mints.length, eligible: g.mints.length, failures: 0, credits: 0, note: null };
 
   const db = supabaseAdmin;
-  const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
-  const [{ data: state }, { data: runs }] = await Promise.all([
-    db.from("scanner_state").select("helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single(),
-    db.from("scan_runs").select("rpc_calls").gte("run_at", monthStart).limit(10000),
-  ]);
-  const used = (runs ?? []).reduce((a, r) => a + (r.rpc_calls ?? 0), 0);
-  const budget = planHeliusBudget({ monthlyBudget: state?.helius_monthly_budget ?? 1_000_000, usedThisMonth: used, maxCoins, maxTx: state?.helius_discovery_max_tx ?? 30 });
+  const b = budgetIn ?? (await loadHeliusBudget());
+  const budget = planHeliusBudget({ ...b, maxCoins });
   const base = { found: [], retrieved: 0, eligible: 0, failures: 0, credits: 0 };
   if (!budget.allowedTx) {
     console.error(JSON.stringify({ evt: "helius_discovery_skipped", reason: budget.reason }));
