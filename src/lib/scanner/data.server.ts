@@ -18,24 +18,26 @@ export type DexPair = {
 
 export type TokenProfile = { tokenAddress: string; chainId: string; description?: string };
 
-async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-  let res = await fetch(url, init);
-  // Free APIs rate-limit shared cloud IPs: back off briefly on 429 (2s, then 5s).
-  for (const wait of [2000, 5000]) {
-    if (res.status !== 429) break;
-    await new Promise((r) => setTimeout(r, wait));
-    res = await fetch(url, init);
-  }
-  if (!res.ok) throw new Error(`${url} failed [${res.status}]: ${(await res.text()).slice(0, 200)}`);
-  return (await res.json()) as T;
+import { getJsonPolite } from "./http";
+
+/** All free market-data calls go through the polite client (pacing, bounded retries, cooldown, cache). */
+async function getJson<T>(url: string): Promise<T> {
+  return getJsonPolite<T>(url);
 }
 
 /** Brand-new Pump.fun launches (GeckoTerminal new pools), newest first, within maxAgeMin. */
 export async function discoverPumpMints(maxAgeMin = 10): Promise<{ mint: string; description: string | undefined }[]> {
   type Pool = { attributes: { pool_created_at: string }; relationships: { dex: { data: { id: string } }; base_token: { data: { id: string } } } };
-  const pages = await Promise.allSettled(
-    [1, 2, 3].map((p) => getJson<{ data: Pool[] }>(`https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=${p}`)),
-  );
+  // Sequential pages; stop at the first failure so a limiting provider isn't hit again.
+  const pages: PromiseSettledResult<{ data: Pool[] }>[] = [];
+  for (const p of [1, 2, 3]) {
+    try {
+      pages.push({ status: "fulfilled", value: await getJson<{ data: Pool[] }>(`https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=${p}`) });
+    } catch (e) {
+      pages.push({ status: "rejected", reason: e });
+      break;
+    }
+  }
   const cutoff = Date.now() - maxAgeMin * 60_000;
   const seen = new Set<string>();
   const failed = pages.filter((p) => p.status === "rejected").map((p) => String((p as PromiseRejectedResult).reason).slice(0, 120));
@@ -298,9 +300,7 @@ export type DexPaid = { status: "PAID" | "NOT_PAID" | "UNKNOWN"; boosts: number 
 /** Whether the team paid DexScreener for a token profile (free public endpoint). Failures → UNKNOWN, never assumed. */
 export async function fetchDexPaid(mint: string): Promise<DexPaid> {
   try {
-    const r = await fetch(`https://api.dexscreener.com/orders/v1/solana/${mint}`, { signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return { status: "UNKNOWN", boosts: 0 };
-    const j = (await r.json()) as { orders?: { type: string; status: string }[]; boosts?: unknown[] } | unknown[];
+    const j = (await getJson<unknown>(`https://api.dexscreener.com/orders/v1/solana/${mint}`)) as { orders?: { type: string; status: string }[]; boosts?: unknown[] } | unknown[];
     const orders = Array.isArray(j) ? (j as { type: string; status: string }[]) : (j.orders ?? []);
     const boosts = Array.isArray(j) ? 0 : (j.boosts?.length ?? 0);
     const paid = orders.some((o) => o.type === "tokenProfile" && o.status === "approved");
