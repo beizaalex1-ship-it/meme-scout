@@ -14,4 +14,8 @@
 - [ ] Step 4: evaluation report
 - [ ] Coin discovery blocked by GeckoTerminal on published server — waiting on user choice (Helius fallback vs paid API)
 - [ ] Create owner account + admin role (needs owner email)
-- [ ] Recommendation-quality audit (root causes + evidence) — in progress; fixes wait for user review
+- [x] 1. Recommendation audit (root causes shown to user)
+- [ ] 2. Fix live market data + fallback (awaiting go-ahead)
+- [ ] 3. Wallet-verification scoring + mandatory safety; Telegram approved-only
+- [ ] 4. Early-detection signals
+- [ ] Performance tracking 5/15/30/60 reliable (on-time checks, max gain/loss)
