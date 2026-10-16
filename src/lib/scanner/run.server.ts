@@ -39,7 +39,15 @@ export async function runScan(): Promise<string> {
     const { data: known } = await db.from("scanned_tokens").select("mint").in("mint", mints.length ? mints : ["-"]);
     const knownSet = new Set((known ?? []).map((k) => k.mint));
     const fresh = found.filter((f) => !knownSet.has(f.mint));
-    const pairs = await fetchPairs(fresh.map((f) => f.mint));
+    // A market-data failure ends this scan's candidate list, not the scan itself.
+    let pairs = new Map<string, DexPair>();
+    let marketFailed = "";
+    try {
+      pairs = await fetchPairs(fresh.map((f) => f.mint));
+    } catch (e) {
+      marketFailed = e instanceof Error ? e.message.slice(0, 120) : String(e);
+      console.error(JSON.stringify({ evt: "market_data_failed", stage: "discovery", coins: fresh.length, error: marketFailed }));
+    }
 
     const prelim = fresh
       .map((f) => ({ ...f, pair: pairs.get(f.mint) }))
@@ -118,7 +126,7 @@ export async function runScan(): Promise<string> {
       if (outcome === "alerted") alerted++;
       if (outcome === "rejected" || outcome === "holder_rejected") rejected++;
     }
-    summary = `Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}`;
+    summary = `Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — market data unavailable, ${fresh.length} coins left for next scan` : ""}`;
     return summary;
   } finally {
     await db.from("scan_runs").insert({
