@@ -1,7 +1,9 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { getDashboard, resumeScanner, scanNow, sendTestAlert, setMaxCoins } from "@/lib/scanner/scanner.functions";
+import { getDashboard, resumeScanner, scanNow, sendTestAlert, setMaxCoins, setHeliusLimits } from "@/lib/scanner/scanner.functions";
+import { useServerFn } from "@tanstack/react-start";
+import { supabase } from "@/integrations/supabase/client";
 
 const dashboardQuery = queryOptions({
   queryKey: ["dashboard"],
@@ -9,10 +11,10 @@ const dashboardQuery = queryOptions({
   refetchInterval: 30_000,
 });
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
     meta: [
-      { title: "Coin Hunter — Pump.fun Meme Coin Scanner" },
+      { title: "Dashboard — Coin Hunter" },
       { name: "description", content: "Seven research agents scan graduating Pump.fun tokens, filter rugs and push alerts to Telegram." },
       { property: "og:title", content: "Coin Hunter — Pump.fun Meme Coin Scanner" },
       { property: "og:description", content: "Seven research agents scan graduating Pump.fun tokens, filter rugs and push alerts to Telegram." },
@@ -22,6 +24,15 @@ export const Route = createFileRoute("/")({
   }),
   loader: ({ context }) => context.queryClient.ensureQueryData(dashboardQuery),
   component: Dashboard,
+  errorComponent: ({ error }) => (
+    <main className="flex min-h-screen items-center justify-center bg-background p-6 text-center text-foreground">
+      <div>
+        <h1 className="text-xl font-semibold">No access</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{String(error?.message ?? "").includes("Forbidden") ? "This account is not allowed to use the scanner." : "The dashboard couldn't load."}</p>
+        <button onClick={() => supabase.auth.signOut()} className="mt-4 rounded-md border border-border px-4 py-2 text-sm">Sign out</button>
+      </div>
+    </main>
+  ),
 });
 
 type Token = Awaited<ReturnType<typeof getDashboard>>["tokens"][number];
@@ -57,6 +68,12 @@ function Dashboard() {
     await qc.invalidateQueries({ queryKey: ["dashboard"] });
     setScanning(false);
   }
+  async function signOut() {
+    await qc.cancelQueries();
+    qc.clear();
+    await supabase.auth.signOut();
+    router.navigate({ to: "/auth", replace: true });
+  }
   async function resume() {
     await resumeScanner();
     await qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -76,7 +93,7 @@ function Dashboard() {
               Brand-new launches (under 10 min old). Every analyzed coin is sent to Telegram; rugs are auto-rejected.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
           <button
             onClick={scan}
             disabled={scanning}
@@ -91,6 +108,7 @@ function Dashboard() {
           >
             {busy ? "Sending…" : "Send test alert"}
           </button>
+          <button onClick={signOut} className="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground">Sign out</button>
           </div>
         </header>
 
@@ -120,6 +138,12 @@ function Dashboard() {
         )}
 
         <CreditsPanel credits={data.credits} maxCoins={data.state?.max_coins_per_run ?? 3} />
+        <DiscoveryPanel
+          runs={data.credits?.recent ?? []}
+          monthUsed={data.monthUsed ?? 0}
+          budget={data.state?.helius_monthly_budget ?? 1_000_000}
+          maxTx={data.state?.helius_discovery_max_tx ?? 30}
+        />
 
         <OutcomePanel predictions={data.predictions ?? []} />
 
@@ -311,3 +335,51 @@ const agentName = {
   opportunity: "6 · Opportunity Analyst",
   chief: "7 · Chief Research Agent",
 };
+
+function DiscoveryPanel({ runs, monthUsed, budget, maxTx }: { runs: Awaited<ReturnType<typeof getDashboard>>["credits"]["recent"]; monthUsed: number; budget: number; maxTx: number }) {
+  const save = useServerFn(setHeliusLimits);
+  const qc = useQueryClient();
+  const [b, setB] = useState(String(budget));
+  const [t, setT] = useState(String(maxTx));
+  const [msg, setMsg] = useState<string | null>(null);
+  async function submit() {
+    setMsg(null);
+    try {
+      await save({ data: { monthlyBudget: Number(b), maxTx: Number(t) } });
+      setMsg("Saved.");
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Could not save");
+    }
+  }
+  return (
+    <section className="mt-8 rounded-md border border-border bg-card p-4">
+      <h2 className="font-mono text-xs uppercase tracking-widest text-primary">Coin discovery</h2>
+      <p className="mt-1 text-xs text-muted-foreground">GeckoTerminal first (free). If it refuses, new launches are read from Helius within these limits.</p>
+      <div className="mt-3 grid grid-cols-2 gap-3 font-mono sm:grid-cols-3">
+        <Stat label="Helius used this month" value={`${monthUsed.toLocaleString("en-US")} / ${budget.toLocaleString("en-US")}`} />
+        <label className="rounded-md border border-border p-3 text-xs uppercase text-muted-foreground">
+          Monthly budget
+          <input value={b} onChange={(e) => setB(e.target.value)} inputMode="numeric" className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-base text-foreground" />
+        </label>
+        <label className="rounded-md border border-border p-3 text-xs uppercase text-muted-foreground">
+          Launches read per scan
+          <input value={t} onChange={(e) => setT(e.target.value)} inputMode="numeric" className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-base text-foreground" />
+        </label>
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <button onClick={submit} className="rounded-md border border-primary px-3 py-1 text-sm text-primary">Save limits</button>
+        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+      </div>
+      {runs.length > 0 && (
+        <ul className="mt-3 space-y-1 font-mono text-xs text-muted-foreground">
+          {runs.map((r) => (
+            <li key={r.run_at} title={r.discovery_note ?? ""}>
+              {new Date(r.run_at).toLocaleTimeString()} · {r.discovery_provider ?? "—"} · {r.launches_retrieved ?? 0} read · {r.launches_eligible ?? 0} eligible · {r.coins_checked} analyzed · {r.discovery_failures ?? 0} failed · {r.discovery_credits ?? 0} discovery credits
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
