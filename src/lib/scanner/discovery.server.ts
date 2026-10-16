@@ -51,7 +51,7 @@ export async function discoverLaunches(maxAgeMin: number, maxCoins: number): Pro
   for (const s of sel.picked) {
     let parsed;
     try {
-      parsed = extractLaunchMint(await rpc<RawLaunchTx>("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }]));
+      parsed = extractLaunchMint(await rpc<RawLaunchTx>("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]));
     } catch (e) {
       failures++; // not recorded as seen, so it is retried next scan while still in the window
       continue;
