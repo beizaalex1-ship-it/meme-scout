@@ -4,7 +4,9 @@ import { createServerFn } from "@tanstack/react-start";
 export const getDashboard = createServerFn({ method: "GET" }).middleware([requireAdmin]).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
-  const [{ data: state }, { data: tokens }, { data: runs }, { data: preds }] = await Promise.all([
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const [{ data: state }, { data: tokens }, { data: runs }, { data: preds }, { data: monthRuns }] = await Promise.all([
     supabaseAdmin.from("scanner_state").select("paused_reason,last_run_at,last_run_summary,max_coins_per_run,helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single(),
     supabaseAdmin
       .from("scanned_tokens")
@@ -17,6 +19,7 @@ export const getDashboard = createServerFn({ method: "GET" }).middleware([requir
       .select("id,mint,name,symbol,detected_at,status,score,wallet_risk,security_verdict,initial_price_usd,prediction_observations(checkpoint,status,observed_at,price_usd,price_change_pct,reason)")
       .order("detected_at", { ascending: false })
       .limit(25),
+    supabaseAdmin.from("scan_runs").select("rpc_calls").gte("run_at", monthStart).limit(10000),
   ]);
   return {
     state,
@@ -24,6 +27,7 @@ export const getDashboard = createServerFn({ method: "GET" }).middleware([requir
     chatIdSet: !!process.env["TELEGRAM_CHAT_ID"],
     credits: summarizeCredits(runs ?? []),
     predictions: preds ?? [],
+    monthUsed: (monthRuns ?? []).reduce((a, r) => a + (r.rpc_calls ?? 0), 0),
   };
 });
 
