@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import { getDashboard, resumeScanner, scanNow, sendTestAlert, setMaxCoins, setHeliusLimits } from "@/lib/scanner/scanner.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,9 +16,9 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
     meta: [
       { title: "Dashboard — Coin Hunter" },
-      { name: "description", content: "Seven research agents scan graduating Pump.fun tokens, filter rugs and push alerts to Telegram." },
+      { name: "description", content: "Seven research agents scan brand-new Pump.fun launches, filter rugs and push alerts to Telegram." },
       { property: "og:title", content: "Coin Hunter — Pump.fun Meme Coin Scanner" },
-      { property: "og:description", content: "Seven research agents scan graduating Pump.fun tokens, filter rugs and push alerts to Telegram." },
+      { property: "og:description", content: "Seven research agents scan brand-new Pump.fun launches, filter rugs and push alerts to Telegram." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -29,7 +30,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
       <div>
         <h1 className="text-xl font-semibold">No access</h1>
         <p className="mt-2 text-sm text-muted-foreground">{String((error as Error)?.message ?? "").includes("Forbidden") ? "This account is not allowed to use the scanner." : "The dashboard couldn't load."}</p>
-        <button onClick={() => supabase.auth.signOut()} className="mt-4 rounded-md border border-border px-4 py-2 text-sm">Sign out</button>
+        <Button onClick={() => supabase.auth.signOut()} className="mt-4 rounded-md border border-border px-4 py-2 text-sm">Sign out</Button>
       </div>
     </main>
   ),
@@ -43,6 +44,7 @@ const statusStyle: Record<string, string> = {
   rejected: "bg-destructive text-destructive-foreground",
   error: "bg-warning text-primary-foreground",
   pending: "bg-muted text-muted-foreground",
+  unanalyzed: "bg-muted text-warning",
 };
 
 function Dashboard() {
@@ -90,25 +92,25 @@ function Dashboard() {
             <p className="font-mono text-xs uppercase tracking-widest text-primary">Solana · Pump.fun · every 5 min</p>
             <h1 className="mt-1 text-4xl font-bold">Coin Hunter</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Brand-new launches (under 10 min old). Every analyzed coin is sent to Telegram; rugs are auto-rejected.
+              Brand-new launches · Approved opportunities only
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-          <button
+          <Button
             onClick={scan}
             disabled={scanning}
             className="rounded-md border border-primary px-4 py-2 font-semibold text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
           >
             {scanning ? "Scanning…" : "Scan now"}
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={test}
             disabled={busy}
             className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
             {busy ? "Sending…" : "Send test alert"}
-          </button>
-          <button onClick={signOut} className="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground">Sign out</button>
+          </Button>
+          <Button onClick={signOut} className="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground">Sign out</Button>
           </div>
         </header>
 
@@ -121,15 +123,15 @@ function Dashboard() {
         {data.state?.paused_reason && (
           <div className="mt-4 flex items-center justify-between gap-4 rounded-md border border-destructive p-3 text-sm">
             <span>Scanner paused: {data.state.paused_reason}</span>
-            <button onClick={resume} className="rounded bg-destructive px-3 py-1 text-destructive-foreground">
+            <Button onClick={resume} className="rounded bg-destructive px-3 py-1 text-destructive-foreground">
               Resume
-            </button>
+            </Button>
           </div>
         )}
 
         <section className="mt-6 grid grid-cols-2 gap-3 font-mono sm:grid-cols-5">
           <Stat label="Last run" value={data.state?.last_run_at ? new Date(data.state.last_run_at).toLocaleTimeString() : "never"} />
-          {["alerted", "passed", "rejected", "error"].map((s) => (
+          {["alerted", "passed", "rejected", "unanalyzed"].map((s) => (
             <Stat key={s} label={s} value={String(counts[s] ?? 0)} />
           ))}
         </section>
@@ -137,6 +139,10 @@ function Dashboard() {
           <p className="mt-2 font-mono text-xs text-muted-foreground">{data.state.last_run_summary}</p>
         )}
 
+        <section className="mt-6 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4 font-mono text-xs">
+          <span>Next scan estimate: {data.costEstimate?.normalMax ?? "—"} Helius attempts · with retries: up to {data.costEstimate?.retryMax ?? "—"}</span>
+          <span className="text-muted-foreground">Limited by remaining monthly allowance</span>
+        </section>
         <CreditsPanel credits={data.credits} maxCoins={data.state?.max_coins_per_run ?? 3} />
         <DiscoveryPanel
           runs={data.credits?.recent ?? []}
@@ -300,18 +306,18 @@ function TokenRow({ t }: { t: Token }) {
   const r = JSON.parse(t.reports) as Record<string, Record<string, unknown>>;
   return (
     <article className="rounded-md border border-border bg-card">
-      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-3 p-4 text-left">
+      <Button onClick={() => setOpen(!open)} className="flex w-full items-center gap-3 p-4 text-left">
         <span className={`rounded px-2 py-0.5 font-mono text-xs uppercase ${statusStyle[t.status] ?? ""}`}>{t.status}</span>
         <span className="font-semibold">{t.name ?? "Unknown"}</span>
         <span className="font-mono text-sm text-muted-foreground">${t.symbol}</span>
         <span className="ml-auto font-mono text-lg text-primary">{t.score ?? "—"}</span>
-      </button>
+      </Button>
       {open && (
         <div className="space-y-3 border-t border-border p-4 text-sm">
           <p className="break-all font-mono text-xs text-muted-foreground">CA: {t.mint}</p>
           {t.verdict && <p><b>Verdict:</b> {t.verdict}</p>}
           {t.error && <p className="text-destructive">Error: {t.error}</p>}
-          {(["hunter", "market", "social", "wallet", "security", "opportunity", "chief"] as const).map(
+          {(["hunter", "market", "marketData", "approval", "social", "wallet", "security", "opportunity", "chief"] as const).map(
             (k) =>
               r[k] && (
                 <details key={k} className="rounded border border-border p-2">
@@ -329,6 +335,8 @@ function TokenRow({ t }: { t: Token }) {
 const agentName = {
   hunter: "1 · Coin Hunter",
   market: "2 · Market Analyst",
+  marketData: "Live market evidence",
+  approval: "Approval checks",
   social: "3 · Social Intelligence",
   wallet: "4 · Wallet Investigator",
   security: "5 · Security Analyst",
@@ -368,7 +376,7 @@ function DiscoveryPanel({ runs, monthUsed, budget, maxTx }: { runs: Awaited<Retu
         </label>
       </div>
       <div className="mt-2 flex items-center gap-3">
-        <button onClick={submit} className="rounded-md border border-primary px-3 py-1 text-sm text-primary">Save limits</button>
+        <Button onClick={submit} className="rounded-md border border-primary px-3 py-1 text-sm text-primary">Save limits</Button>
         {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
       {runs.length > 0 && (
