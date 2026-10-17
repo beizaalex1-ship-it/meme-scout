@@ -1,5 +1,6 @@
 import { requireAdmin } from "@/lib/admin-middleware";
 import { createServerFn } from "@tanstack/react-start";
+import { RESERVE_PER_COIN } from "./discovery";
 
 export const getDashboard = createServerFn({ method: "GET" }).middleware([requireAdmin]).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -28,6 +29,8 @@ export const getDashboard = createServerFn({ method: "GET" }).middleware([requir
     credits: summarizeCredits(runs ?? []),
     predictions: preds ?? [],
     monthUsed: (monthRuns ?? []).reduce((a, r) => a + (r.rpc_calls ?? 0), 0),
+    costEstimate: { normalMax: 2 + (state?.helius_discovery_max_tx ?? 30) + (state?.max_coins_per_run ?? 3) * 47,
+      retryMax: 10 + (state?.helius_discovery_max_tx ?? 30) * 5 + (state?.max_coins_per_run ?? 3) * RESERVE_PER_COIN },
   };
 });
 
