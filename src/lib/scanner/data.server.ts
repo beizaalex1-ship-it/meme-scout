@@ -166,8 +166,15 @@ export async function rpc<T>(method: string, params: unknown[], opts: RpcOptions
       const started = Date.now();
       let retryAfter: string | null = null;
       try {
-        if (rpcBudget.limit !== null && rpcUsage.total >= rpcBudget.limit) throw new RpcError("budget", `${method} stopped: Helius budget reached`);
         await pace(minIntervalMs);
+        // No await between the final check and increment: concurrent paced callers
+        // must not all spend the same last credit. Retries pass this guard too.
+        if (rpcBudget.limit !== null && rpcUsage.total >= rpcBudget.limit) {
+          rpcBudget.skipped++;
+          rpcBudget.byMethod[method] = (rpcBudget.byMethod[method] ?? 0) + 1;
+          console.warn(JSON.stringify({ evt: "helius_budget_skip", method, spent: rpcUsage.total, limit: rpcBudget.limit }));
+          throw new RpcError("budget", `${method} skipped: Helius budget reached`);
+        }
         rpcUsage.total++;
         rpcUsage.byMethod[method] = (rpcUsage.byMethod[method] ?? 0) + 1;
         const res = await doFetch(url, {

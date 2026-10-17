@@ -54,6 +54,7 @@ function isOnCurve(b: Uint8Array) {
 /** Solana findProgramAddress. */
 export function findPda(seeds: Uint8Array[], programId: string): string {
   const prog = b58decode(programId);
+  if (prog.length !== 32 || seeds.length > 15 || seeds.some((s) => s.length > 32)) throw new Error("invalid PDA seeds");
   const tag = new TextEncoder().encode("ProgramDerivedAddress");
   for (let bump = 255; bump >= 0; bump--) {
     const parts = [...seeds, Uint8Array.of(bump), prog, tag];
@@ -70,8 +71,13 @@ export function findPda(seeds: Uint8Array[], programId: string): string {
 }
 
 const enc = (s: string) => new TextEncoder().encode(s);
-export const bondingCurveAddress = (mint: string) => findPda([enc("bonding-curve"), b58decode(mint)], PUMP_PROGRAM_ID);
-export const metadataAddress = (mint: string) => findPda([enc("metadata"), b58decode(METAPLEX_METADATA_PROGRAM), b58decode(mint)], METAPLEX_METADATA_PROGRAM);
+function mintBytes(mint: string) {
+  const bytes = b58decode(mint);
+  if (bytes.length !== 32) throw new Error("invalid mint address");
+  return bytes;
+}
+export const bondingCurveAddress = (mint: string) => findPda([enc("bonding-curve"), mintBytes(mint)], PUMP_PROGRAM_ID);
+export const metadataAddress = (mint: string) => findPda([enc("metadata"), b58decode(METAPLEX_METADATA_PROGRAM), mintBytes(mint)], METAPLEX_METADATA_PROGRAM);
 
 export type CurveState = {
   virtualTokenReserves: bigint;
@@ -91,8 +97,11 @@ function b64(s: string) {
 
 /** Pump.fun BondingCurve account: 8-byte discriminator, 5×u64 reserves, bool complete. Null if not a curve. */
 export function decodeBondingCurve(base64: string): CurveState | null {
-  const d = b64(base64);
+  let d: Uint8Array;
+  try { d = b64(base64); } catch { return null; }
   if (d.length < 49) return null;
+  const discriminator = sha256(new TextEncoder().encode("account:BondingCurve")).slice(0, 8);
+  if (!discriminator.every((x, i) => d[i] === x) || (d[48] !== 0 && d[48] !== 1)) return null;
   const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
   const u = (o: number) => v.getBigUint64(o, true);
   const s: CurveState = {
@@ -206,9 +215,9 @@ export function summarizeActivity(
   nowSec: number,
   windowSec: number,
 ): ActivitySummary {
-  const inWin = sigs.filter((s) => typeof s.blockTime === "number" && nowSec - s.blockTime <= windowSec);
+  const inWin = sigs.filter((s) => typeof s.blockTime === "number" && nowSec >= s.blockTime && nowSec - s.blockTime <= windowSec);
   const ok = inWin.filter((s) => !s.err);
-  const t = trades.filter((x) => nowSec - x.time <= windowSec);
+  const t = trades.filter((x) => nowSec >= x.time && nowSec - x.time <= windowSec);
   const buys = t.filter((x) => x.side === "buy");
   const sells = t.filter((x) => x.side === "sell");
   const parsedSigs = new Set(trades.map((x) => x.signature));
@@ -241,8 +250,9 @@ export function marketReadiness(
   nowMs: number,
 ): MarketReadiness {
   for (const [label, f] of [["price (SOL)", m.priceSol], ["price (USD)", m.priceUsd]] as const) {
-    if (f.value === null || !(f.value > 0)) return { analyzable: false, reason: `${label} unavailable${f.note ? `: ${f.note}` : ""}` };
-    if (!f.at || nowMs - Date.parse(f.at) > MAX_MARKET_AGE_SEC * 1000) return { analyzable: false, reason: `${label} stale (from ${f.at ?? "unknown time"})` };
+    if (f.value === null || !Number.isFinite(f.value) || !(f.value > 0)) return { analyzable: false, reason: `${label} unavailable${f.note ? `: ${f.note}` : ""}` };
+    const at = f.at ? Date.parse(f.at) : NaN;
+    if (!Number.isFinite(at) || at > nowMs || nowMs - at > MAX_MARKET_AGE_SEC * 1000) return { analyzable: false, reason: `${label} stale (from ${f.at ?? "unknown time"})` };
   }
   if (!m.activity) return { analyzable: false, reason: `trade activity unavailable${m.activityError ? `: ${m.activityError}` : ""}` };
   return { analyzable: true };
