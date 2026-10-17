@@ -17,8 +17,8 @@ import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
 import { planCandidates } from "./optimizer";
 import { discoverLaunches, loadHeliusBudget, type DiscoveryResult } from "./discovery.server";
-import { affordableCoins } from "./discovery";
-import { predictionMarket, recordPrediction } from "./outcomes.server";
+import { affordableCoins, RESERVE_PER_COIN } from "./discovery";
+import { collectDueObservations, predictionMarket, recordPrediction } from "./outcomes.server";
 import { fetchOnchainBatch, fetchSolUsd, buildMarketData, attachActivity, toPairLike, type MarketData } from "./market.server";
 import { marketReadiness, UNANALYZED_LABEL } from "./onchain";
 import { approvalDecision } from "./approval";
@@ -45,7 +45,11 @@ export async function runScan(): Promise<string> {
     const hb = await loadHeliusBudget();
     const allowance = Math.max(0, hb.monthlyBudget - hb.usedThisMonth);
     setRpcBudget(allowance);
-    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins, hb);
+    console.log(JSON.stringify({ evt: "scan_cost_estimate", allowance, marketCallsPerCoin: 13, normalMax: 2 + hb.maxTx + maxCoins * 47,
+      retryMax: 10 + hb.maxTx * 5 + maxCoins * RESERVE_PER_COIN, note: "Outcome batches extra; shared remaining allowance is the hard limit" }));
+    try { console.log(JSON.stringify({ evt: "outcome_checks", ok: true, ...(await collectDueObservations()) })); }
+    catch { console.error(JSON.stringify({ evt: "outcome_checks", ok: false, error: "Outcome checks unavailable; scan continues" })); }
+    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins, { ...hb, usedThisMonth: hb.usedThisMonth + rpcUsage.total });
     const found = disc.found;
     const { data: waiting } = await db.from("scanned_tokens").select("mint,created_at")
       .eq("status", "unanalyzed").gte("created_at", new Date(Date.now() - MAX_LAUNCH_AGE_MIN * 60_000).toISOString());
@@ -177,7 +181,11 @@ export async function runScan(): Promise<string> {
       discovery_credits: disc?.credits ?? null,
       discovery_note: [disc?.note, budgetNote, rpcBudget.skipped ? `${rpcBudget.skipped} Helius calls blocked by budget: ${JSON.stringify(rpcBudget.byMethod)}` : ""].filter(Boolean).join("; ") || null,
     });
-    if (runError) throw new Error("Could not persist Helius usage; scanner lock retained");
+    if (runError) {
+      setRpcBudget(0);
+      await db.from("scanner_state").update({ paused_reason: "Helius usage could not be saved; reconcile usage before resuming" }).eq("id", 1);
+      throw new Error("Could not persist Helius usage; scanner paused");
+    }
     setRpcBudget(null);
     await db
       .from("scanner_state")

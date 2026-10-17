@@ -75,8 +75,6 @@ export const scanNow = createServerFn({ method: "POST" }).middleware([requireAdm
   if (Date.now() - lastManual < 30_000) return { ok: false, summary: "Please wait 30 seconds between manual scans." };
   lastManual = Date.now();
   try {
-    const { collectDueObservations } = await import("./outcomes.server");
-    await collectDueObservations().catch((e) => console.error("outcome checks failed", e));
     const { runScan } = await import("./run.server");
     return { ok: true, summary: await runScan() };
   } catch (e) {

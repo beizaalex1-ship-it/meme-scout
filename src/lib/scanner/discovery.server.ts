@@ -6,9 +6,8 @@ export async function loadHeliusBudget() {
   const db = supabaseAdmin;
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
-  const { data: state, error: stateError } = await
-    db.from("scanner_state").select("helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single(),
-  used: number[] = [];
+  const { data: state, error: stateError } = await db.from("scanner_state").select("helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single();
+  const used: number[] = [];
   if (stateError || !state) throw new Error("Helius budget settings unavailable; no RPC requests permitted");
   for (let offset = 0; ; offset += 500) {
     const { data: runs, error } = await db.from("scan_runs").select("rpc_calls").gte("run_at", monthStart).order("run_at").range(offset, offset + 499);
@@ -67,7 +66,7 @@ export async function discoverLaunches(maxAgeMin: number, maxCoins: number, budg
   for (const s of sel.picked) {
     let parsed;
     try {
-      parsed = extractLaunchMint(await rpc<RawLaunchTx>("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]));
+       parsed = extractLaunchMint(await rpc<RawLaunchTx>("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }], { retries: 0 }));
     } catch (e) {
       failures++; // not recorded as seen, so it is retried next scan while still in the window
       continue;

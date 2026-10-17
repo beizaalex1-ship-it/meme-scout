@@ -3,6 +3,7 @@
 import { rpc, type MintResult, type DexPair } from "./data.server";
 import { getJsonPolite } from "./http";
 import { PUMP_PROGRAM_ID } from "./forensics";
+import type { MarketPoint } from "./outcomes";
 import {
   bondingCurveAddress,
   curvePriceSol,
@@ -276,4 +277,31 @@ export async function attachActivity(mint: string, oc: OnchainCoin | undefined, 
   }
   if (!md.activity) md.missing.push(`Trade activity: ${md.activityError ?? "unavailable"}`);
   return md;
+}
+
+/** Outcome price-only batch: no market/wallet analysis or transaction reads. */
+export async function fetchOutcomePrices(mints: string[]): Promise<Map<string, { point: MarketPoint | null; reason: string }>> {
+  const out = new Map<string, { point: MarketPoint | null; reason: string }>();
+  const sol = await fetchSolUsd();
+  for (let i = 0; i < mints.length; i += 100) {
+    const chunk = mints.slice(i, i + 100);
+    try {
+      const r = await rpc<{ value: AcctB64[] }>("getMultipleAccounts", [chunk.map(bondingCurveAddress), { encoding: "base64", commitment: "confirmed" }]);
+      chunk.forEach((mint, j) => {
+        const acct = r.value[j];
+        const c = acct?.owner === PUMP_PROGRAM_ID && Array.isArray(acct.data) ? decodeBondingCurve(acct.data[0]) : null;
+        if (!c || c.complete || !sol.value || !sol.at || Date.now() - Date.parse(sol.at) > 120_000) {
+          out.set(mint, { point: null, reason: c?.complete ? "Graduated curve; indexed price required" : "Curve or SOL/USD price unavailable" });
+          return;
+        }
+        const priceUsd = curvePriceSol(c) * sol.value;
+        out.set(mint, { point: { priceUsd, liquidityUsd: Number(c.realSolReserves) / LAMPORTS_PER_SOL * sol.value,
+          marketCapUsd: priceUsd * Number(c.tokenTotalSupply) / 1e6, volumeH1Usd: null, volumeH24Usd: null },
+          reason: `Helius curve × ${sol.source} (USD estimate); observed now, not historical` });
+      });
+    } catch (e) {
+      for (const mint of chunk) out.set(mint, { point: null, reason: e instanceof Error ? e.message : "Outcome price unavailable" });
+    }
+  }
+  return out;
 }
