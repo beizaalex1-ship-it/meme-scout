@@ -6,14 +6,20 @@ export async function loadHeliusBudget() {
   const db = supabaseAdmin;
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
-  const [{ data: state }, { data: runs }] = await Promise.all([
+  const { data: state, error: stateError } = await
     db.from("scanner_state").select("helius_monthly_budget,helius_discovery_max_tx").eq("id", 1).single(),
-    db.from("scan_runs").select("rpc_calls").gte("run_at", monthStart).limit(10000),
-  ]);
+  used: number[] = [];
+  if (stateError || !state) throw new Error("Helius budget settings unavailable; no RPC requests permitted");
+  for (let offset = 0; ; offset += 500) {
+    const { data: runs, error } = await db.from("scan_runs").select("rpc_calls").gte("run_at", monthStart).order("run_at").range(offset, offset + 499);
+    if (error || !runs) throw new Error("Helius usage unavailable; no RPC requests permitted");
+    used.push(...runs.map((r) => r.rpc_calls ?? 0));
+    if (runs.length < 500) break;
+  }
   return {
-    monthlyBudget: state?.helius_monthly_budget ?? 1_000_000,
-    usedThisMonth: (runs ?? []).reduce((a, r) => a + (r.rpc_calls ?? 0), 0),
-    maxTx: state?.helius_discovery_max_tx ?? 30,
+    monthlyBudget: state.helius_monthly_budget,
+    usedThisMonth: used.reduce((a, n) => a + n, 0),
+    maxTx: state.helius_discovery_max_tx,
   };
 }
 
