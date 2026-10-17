@@ -12,10 +12,10 @@
 - [ ] Step 2: time-based market features
 - [ ] Step 3: Chief/scoring upgrades (confidence separate from score)
 - [ ] Step 4: evaluation report
-- [ ] Coin discovery blocked by GeckoTerminal on published server — waiting on user choice (Helius fallback vs paid API)
-- [ ] Create owner account + admin role (needs owner email)
+- [x] Helius discovery fallback for GeckoTerminal failures
+- [x] Owner account + admin role
 - [x] 1. Recommendation audit (root causes shown to user)
-- [ ] 2. Fix live market data + fallback (awaiting go-ahead)
+- [ ] 2. Finish live market-data integration, explicit unanalyzed dashboard results, cost estimate, concurrent budget guard and regression/live verification (approved; no publish)
 - [ ] 3. Wallet-verification scoring + mandatory safety; Telegram approved-only
 - [ ] 4. Early-detection signals
 - [ ] Performance tracking 5/15/30/60 reliable (on-time checks, max gain/loss)
