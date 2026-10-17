@@ -2,7 +2,7 @@ import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { formatAlert } from "./alert";
 import { AiGatewayError, runAiAgents } from "./ai.server";
-import { resetRpcUsage, rpcUsage, rpcBudget, setRpcBudget, fetchHolderPcts, fetchMintInfoBatch, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
+import { resetRpcUsage, rpcUsage, rpcBudget, setRpcBudget, fetchHolderPcts, type MintResult, fetchPairs, type DexPair, fetchDexPaid } from "./data.server";
 import {
   adjustScoreForEvidence,
   analyzeMarket,
@@ -17,8 +17,11 @@ import { sendTelegram } from "./telegram.server";
 import { investigateWallets } from "./forensics.server";
 import { planCandidates } from "./optimizer";
 import { discoverLaunches, loadHeliusBudget, type DiscoveryResult } from "./discovery.server";
-import { affordableCoins } from "./discovery";
-import { predictionMarket, recordPrediction } from "./outcomes.server";
+import { affordableCoins, RESERVE_PER_COIN } from "./discovery";
+import { collectDueObservations, predictionMarket, recordPrediction } from "./outcomes.server";
+import { fetchOnchainBatch, fetchSolUsd, buildMarketData, attachActivity, toPairLike, type MarketData } from "./market.server";
+import { marketReadiness, UNANALYZED_LABEL } from "./onchain";
+import { approvalDecision } from "./approval";
 
 export const DEFAULT_MAX_COINS_PER_RUN = 3;
 
@@ -42,46 +45,53 @@ export async function runScan(): Promise<string> {
     const hb = await loadHeliusBudget();
     const allowance = Math.max(0, hb.monthlyBudget - hb.usedThisMonth);
     setRpcBudget(allowance);
-    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins, hb);
+    console.log(JSON.stringify({ evt: "scan_cost_estimate", allowance, marketCallsPerCoin: 13, normalMax: 2 + hb.maxTx + maxCoins * 47,
+      retryMax: 10 + hb.maxTx * 5 + maxCoins * RESERVE_PER_COIN, note: "Outcome batches extra; shared remaining allowance is the hard limit" }));
+    try { console.log(JSON.stringify({ evt: "outcome_checks", ok: true, ...(await collectDueObservations()) })); }
+    catch { console.error(JSON.stringify({ evt: "outcome_checks", ok: false, error: "Outcome checks unavailable; scan continues" })); }
+    disc = await discoverLaunches(MAX_LAUNCH_AGE_MIN, maxCoins, { ...hb, usedThisMonth: hb.usedThisMonth + rpcUsage.total });
     const found = disc.found;
-    const mints = found.map((f) => f.mint);
-    const inList = mints.length ? mints : ["-"];
+    const { data: waiting } = await db.from("scanned_tokens").select("mint,created_at")
+      .eq("status", "unanalyzed").gte("created_at", new Date(Date.now() - MAX_LAUNCH_AGE_MIN * 60_000).toISOString());
+    const queue = [...new Map([...found, ...(waiting ?? []).map((r) => ({ mint: r.mint, description: undefined }))].map((r) => [r.mint, r])).values()];
+    const inList = queue.length ? queue.map((f) => f.mint) : ["-"];
     const [{ data: known }, { data: knownPred }] = await Promise.all([
-      db.from("scanned_tokens").select("mint").in("mint", inList),
+      db.from("scanned_tokens").select("mint,status").in("mint", inList),
       db.from("predictions").select("mint").in("mint", inList),
     ]);
-    const knownSet = new Set([...(known ?? []), ...(knownPred ?? [])].map((k) => k.mint));
-    const fresh = found.filter((f) => !knownSet.has(f.mint));
-    // A market-data failure ends this scan's candidate list, not the scan itself.
+    const knownSet = new Set([...(known ?? []).filter((k) => k.status !== "unanalyzed"), ...(knownPred ?? [])].map((k) => k.mint));
+    const fresh = queue.filter((f) => !knownSet.has(f.mint));
+    if (fresh.length) {
+      const { error } = await db.from("scanned_tokens").upsert(fresh.map((f) => ({ mint: f.mint, status: "unanalyzed", verdict: UNANALYZED_LABEL,
+        reports: { marketData: { missing: ["Awaiting market and safety checks"], analyzable: false }, approval: { approved: false } } })), { onConflict: "mint", ignoreDuplicates: true });
+      if (error) throw new Error("Could not save discovered coins");
+    }
     let pairs = new Map<string, DexPair>();
     let marketFailed = "";
-    try {
-      pairs = await fetchPairs(fresh.map((f) => f.mint));
-    } catch (e) {
-      marketFailed = e instanceof Error ? e.message.slice(0, 120) : String(e);
+    const dexAt = new Date().toISOString(); // conservative request start, including HTTP cache age below
+    try { pairs = await fetchPairs(fresh.map((f) => f.mint)); }
+    catch (e) {
+      marketFailed = e instanceof Error ? e.message.slice(0, 120) : "Indexed market unavailable";
       console.error(JSON.stringify({ evt: "market_data_failed", stage: "discovery", coins: fresh.length, error: marketFailed }));
     }
-
-    const prelim = fresh
-      .map((f) => ({ ...f, pair: pairs.get(f.mint) }))
-      .filter((c): c is typeof c & { pair: DexPair } => !!c.pair)
-      // "made well": real early trading activity, plus a bonus for listed website/socials
-      .map((c) => {
-        const tx = c.pair.txns?.["m5"] ?? { buys: 0, sells: 0 };
-        const links = (c.pair.info?.websites?.length ?? 0) + (c.pair.info?.socials?.length ?? 0);
-        return { ...c, quality: tx.buys + tx.sells + links * 20 };
-      })
-      .filter((c) => (c.pair.txns?.["m5"]?.buys ?? 0) >= 3)
-      .sort((x, y) => y.quality - x.quality)
-      .slice(0, 30);
-
+    const solUsd = fresh.length ? await fetchSolUsd() : { value: null, source: "none", at: null };
+    const onchain = await fetchOnchainBatch(fresh.map((f) => f.mint));
+    const prelim = fresh.map((f) => {
+      const oc = onchain.get(f.mint);
+      const dex = pairs.get(f.mint);
+      const mintRes: MintResult = oc?.mintRes ?? { ok: false, reason: "not returned" };
+      // Dex cache is at most 30 seconds old: do not relabel its receipt as a fresh source read.
+      const md = buildMarketData(oc, dex, new Date(Date.parse(dexAt) - 30_000).toISOString(), solUsd, mintRes.ok ? mintRes.info.supply : null);
+      const pair = toPairLike(f.mint, oc, dex, md);
+      const quality = (dex?.txns?.["m5"]?.buys ?? 0) + (dex?.txns?.["m5"]?.sells ?? 0);
+      return { ...f, pair, mintRes, md, oc, dex, quality };
+    });
     // Credits optimizer: one batched Helius request checks every candidate's mint, then only
     // coins with verified PASS safety data get the expensive holder/forensics/AI checks.
-    const mintInfo = await fetchMintInfoBatch(prelim.map((c) => c.mint));
     const withSec = prelim.map((c) => {
-      const m: MintResult = mintInfo.get(c.mint) ?? { ok: false, reason: "not returned" };
+      const m = c.mintRes;
       const security = m.ok ? analyzeSecurity({ ...m.info, dexId: c.pair.dexId }, c.pair.dexId) : analyzeSecurity(null, c.pair.dexId, m.reason);
-      return { ...c, mintRes: m, security };
+      return { ...c, security };
     });
     const coinsCap = affordableCoins(allowance, rpcUsage.total, maxCoins);
     if (coinsCap < maxCoins) {
@@ -90,6 +100,11 @@ export async function runScan(): Promise<string> {
     }
     const plan = planCandidates(withSec.map((c) => ({ item: c, quality: c.quality, security: c.security })), coinsCap);
     opt.skippedUnverified = plan.skippedUnverified.length;
+    for (const c of [...plan.skippedUnverified, ...plan.overCap]) {
+      await db.from("scanned_tokens").update({ name: c.pair.baseToken.name || null, symbol: c.pair.baseToken.symbol || null,
+        verdict: UNANALYZED_LABEL, reports: JSON.parse(JSON.stringify({ marketData: c.md, security: c.security,
+          approval: { approved: false, reasons: [c.security.verdict !== "PASS" ? "Security UNVERIFIED" : "Per-run credit/coin cap; mandatory checks not run"] } })) }).eq("mint", c.mint);
+    }
     if (plan.earlyReject.length) {
       const { data: ins } = await db
         .from("scanned_tokens")
@@ -102,7 +117,7 @@ export async function runScan(): Promise<string> {
             verdict: `REJECTED DUE TO RISK: ${c.security.flags[0]}`,
             reports: JSON.parse(JSON.stringify({ security: c.security, optimizer: "Rejected on the first Helius check; no further credits spent" })),
           })),
-          { onConflict: "mint", ignoreDuplicates: true },
+          { onConflict: "mint" },
         )
         .select("mint");
       opt.earlyRejected = ins?.length ?? 0;
@@ -117,25 +132,28 @@ export async function runScan(): Promise<string> {
     }
     const candidates = plan.analyze;
 
-    // Atomically claim candidates: only mints this run inserted are analysed, so an overlapping
-    // run (e.g. after lock expiry) can never alert the same coin twice.
-    const { data: claimed, error: claimErr } = candidates.length
-      ? await db
-          .from("scanned_tokens")
-          .upsert(
-            candidates.map((c) => ({ mint: c.mint, name: c.pair.baseToken.name || null, symbol: c.pair.baseToken.symbol || null, status: "pending" })),
-            { onConflict: "mint", ignoreDuplicates: true },
-          )
-          .select("mint")
-      : { data: [], error: null };
-    if (claimErr) throw new Error(`claim failed: ${claimErr.message}`);
-    const claimedSet = new Set((claimed ?? []).map((r) => r.mint));
+    // A conditional transition claims both new rows and retryable market failures.
+    const claimedSet = new Set<string>();
+    for (const c of candidates) {
+      const { data: claimed, error } = await db.from("scanned_tokens").update({ status: "pending", name: c.pair.baseToken.name || null, symbol: c.pair.baseToken.symbol || null })
+        .eq("mint", c.mint).eq("status", "unanalyzed").select("mint");
+      if (error) throw new Error("Could not claim coin");
+      if (claimed?.length) claimedSet.add(c.mint);
+    }
 
     let alerted = 0;
     let rejected = 0;
     for (const c of candidates.filter((x) => claimedSet.has(x.mint))) {
       analyzedCount++;
-      const outcome = await analyzeToken(c.mint, c.pair, c.mintRes, c.description);
+      const md = await attachActivity(c.mint, c.oc, c.dex, new Date(Date.parse(dexAt) - 30_000).toISOString(), c.md);
+      const pair = toPairLike(c.mint, c.oc, c.dex, md);
+      const ready = marketReadiness(md, Date.now());
+      if (!ready.analyzable || c.oc?.curve?.complete) {
+        await db.from("scanned_tokens").update({ status: "unanalyzed", verdict: UNANALYZED_LABEL, score: null, alert_text: null,
+          reports: JSON.parse(JSON.stringify({ marketData: md, security: c.security, approval: { approved: false, reasons: [ready.analyzable ? "Graduated token outside launch scope" : ready.reason] } })) }).eq("mint", c.mint);
+        continue;
+      }
+      const outcome = await analyzeToken(c.mint, pair, c.mintRes, md, !!c.oc?.curve && !c.oc.curve.complete, c.description);
       if (outcome === "holder_rejected") opt.holderRejected++;
       if (outcome === "paused") {
         summary = "Paused after AI access error";
@@ -144,12 +162,11 @@ export async function runScan(): Promise<string> {
       if (outcome === "alerted") alerted++;
       if (outcome === "rejected" || outcome === "holder_rejected") rejected++;
     }
-    summary = `[${disc.provider}${disc.provider === "helius" ? `: ${disc.retrieved} launches read, ${disc.credits} credits` : ""}] Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — market data unavailable, ${fresh.length} coins left for next scan` : ""}${budgetNote ? ` — ${budgetNote}` : ""}${rpcBudget.skipped ? ` — ${rpcBudget.skipped} Helius checks skipped (budget), marked UNVERIFIED` : ""}`;
+    summary = `[${disc.provider}${disc.provider === "helius" ? `: ${disc.retrieved} launches read, ${disc.credits} credits` : ""}] Found ${found.length}, new ${fresh.length}, analyzed ${candidates.length}, rejected ${rejected + opt.earlyRejected}, alerted ${alerted}, skipped unverified ${opt.skippedUnverified}${marketFailed ? ` — indexed market unavailable; on-chain fallback attempted` : ""}${budgetNote ? ` — ${budgetNote}` : ""}${rpcBudget.skipped ? ` — ${rpcBudget.skipped} Helius checks skipped (budget), marked UNVERIFIED` : ""}`;
     return summary;
   } finally {
     if (rpcBudget.skipped) console.warn(JSON.stringify({ evt: "helius_budget_summary", skipped: rpcBudget.skipped, byMethod: rpcBudget.byMethod }));
-    setRpcBudget(null);
-    await db.from("scan_runs").insert({
+    const { error: runError } = await db.from("scan_runs").insert({
       coins_checked: analyzedCount,
       rpc_calls: rpcUsage.total,
       calls_by_method: { ...rpcUsage.byMethod },
@@ -164,6 +181,12 @@ export async function runScan(): Promise<string> {
       discovery_credits: disc?.credits ?? null,
       discovery_note: [disc?.note, budgetNote, rpcBudget.skipped ? `${rpcBudget.skipped} Helius calls blocked by budget: ${JSON.stringify(rpcBudget.byMethod)}` : ""].filter(Boolean).join("; ") || null,
     });
+    if (runError) {
+      setRpcBudget(0);
+      await db.from("scanner_state").update({ paused_reason: "Helius usage could not be saved; reconcile usage before resuming" }).eq("id", 1);
+      throw new Error("Could not persist Helius usage; scanner paused");
+    }
+    setRpcBudget(null);
     await db
       .from("scanner_state")
       .update({ lock_until: null, last_run_at: new Date().toISOString(), ...(summary ? { last_run_summary: summary } : {}) })
@@ -171,7 +194,7 @@ export async function runScan(): Promise<string> {
   }
 }
 
-async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, description?: string) {
+async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, marketData: MarketData, curveVerified: boolean, description?: string) {
   const db = supabaseAdmin;
   const hunter: CoinHunterReport = {
     name: pair.baseToken.name || null,
@@ -241,7 +264,9 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
       websites: pair.info?.websites?.map((w) => w.url) ?? [],
       socials: pair.info?.socials?.map((s) => `${s.type}: ${s.url}`) ?? [],
     };
-    const reports: Record<string, Json> = JSON.parse(JSON.stringify( { hunter, market, wallet, security, socials }));
+    // Keep 5-minute sampled activity separate from hour totals; no invented hour volume.
+    market.bondingCurvePct = marketData.bondingCurvePct.value ?? market.bondingCurvePct;
+    const reports: Record<string, Json> = JSON.parse(JSON.stringify({ hunter, market, marketData, wallet, security, socials }));
 
     if (shouldReject(security, wallet)) {
       const reason = security.verdict === "FAIL" ? security.flags[0] : wallet.flags.find((f) => f.startsWith("RED"));
@@ -255,7 +280,7 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
 
     let ai;
     try {
-      ai = await runAiAgents({ hunter, market, wallet, security, socials });
+      ai = await runAiAgents({ hunter, market, marketData, wallet, security, socials });
     } catch (e) {
       if (e instanceof AiGatewayError && (e.status === 402 || e.status === 403 || e.status === 401)) {
         await db.from("scanner_state").update({ paused_reason: `AI unavailable [${e.status}]: ${e.message}` }).eq("id", 1);
@@ -284,16 +309,18 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, de
       forensics,
       dexPaid,
     });
-    const alert = shouldAlert(score);
+    const approval = approvalDecision(score, security, wallet, marketData, curveVerified, Date.now());
+    reports["approval"] = approval;
+    const alert = approval.approved && shouldAlert(score);
     if (alert) await sendTelegram(alertText);
     await db
       .from("scanned_tokens")
       .update({
         status: alert ? "alerted" : "passed",
         score,
-        verdict: ai.chief.takeaway,
+        verdict: alert ? ai.chief.takeaway : `NOT APPROVED: ${approval.reasons.join("; ")}`,
         reports,
-        alert_text: alertText,
+        alert_text: alert ? alertText : null,
         updated_at: new Date().toISOString(),
       })
       .eq("mint", mint);

@@ -1,6 +1,7 @@
 import type { Json } from "@/integrations/supabase/types";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { fetchPairs, type DexPair } from "./data.server";
+import { fetchOutcomePrices } from "./market.server";
 import { buildObservation, buildPrediction, marketPointFromPair, scheduleObservations, type CheckpointKey, type PredictionInput } from "./outcomes";
 
 /** Insert the frozen prediction once; a repeat for the same discovery event is ignored. */
@@ -26,7 +27,7 @@ export function predictionMarket(pair: DexPair) {
   return { ...marketPointFromPair(pair), txns: pair.txns ?? {} };
 }
 
-/** Records every due observation using free DexScreener data. Returns counts. */
+/** Due prices: batched Helius curves first, indexed backup for missing/graduated curves. */
 export async function collectDueObservations(limit = 60) {
   const db = supabaseAdmin;
   const now = new Date();
@@ -43,10 +44,11 @@ export async function collectDueObservations(limit = 60) {
   type Row = (typeof due)[number] & { predictions: { mint: string; initial_price_usd: number | null } | null };
   const rows = due as Row[];
   const mints = [...new Set(rows.map((r) => r.predictions?.mint).filter((m): m is string => !!m))];
+  const prices = await fetchOutcomePrices(mints);
   let pairs = new Map<string, DexPair>();
   let fetchError: string | undefined;
   try {
-    pairs = await fetchPairs(mints);
+    pairs = await fetchPairs(mints.filter((mint) => !prices.get(mint)?.point));
   } catch (e) {
     fetchError = e instanceof Error ? e.message : String(e);
   }
@@ -56,20 +58,24 @@ export async function collectDueObservations(limit = 60) {
   for (const r of rows) {
     const mint = r.predictions?.mint;
     const pair = mint ? pairs.get(mint) : undefined;
+    const onchain = mint ? prices.get(mint) : undefined;
+    const point = onchain?.point ?? (pair ? marketPointFromPair(pair) : null);
     const obs = buildObservation({
       checkpoint: r.checkpoint as CheckpointKey,
       dueAt: new Date(r.due_at),
       now,
       initialPrice: r.predictions?.initial_price_usd ?? null,
-      point: pair ? marketPointFromPair(pair) : null,
-      fetchError,
+      point,
+      fetchError: point?.priceUsd ? undefined : (fetchError ?? onchain?.reason ?? "No usable price returned"),
     });
     if (obs.status === "retry") {
       retry++;
       await db.from("prediction_observations").update({ reason: `Retrying — last attempt: ${obs.reason}` }).eq("id", r.id).eq("status", "pending");
       continue;
     }
-    await db.from("prediction_observations").update(obs).eq("id", r.id).eq("status", "pending");
+    const { error: saveError } = await db.from("prediction_observations").update({ ...obs,
+      ...(obs.status === "recorded" ? { reason: onchain?.point ? onchain.reason : "DexScreener indexed backup; observed now, not historical" } : {}) }).eq("id", r.id).eq("status", "pending");
+    if (saveError) throw new Error("Could not save outcome observation");
     if (obs.status === "recorded") recorded++;
     else unavailable++;
   }

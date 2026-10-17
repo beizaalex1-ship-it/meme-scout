@@ -2,6 +2,8 @@
 // Every value carries its source and timestamp; unavailable values stay null, never zero.
 import { rpc, type MintResult, type DexPair } from "./data.server";
 import { getJsonPolite } from "./http";
+import { PUMP_PROGRAM_ID } from "./forensics";
+import type { MarketPoint } from "./outcomes";
 import {
   bondingCurveAddress,
   curvePriceSol,
@@ -72,7 +74,12 @@ export async function fetchOnchainBatch(mints: string[]): Promise<Map<string, On
   const out = new Map<string, OnchainCoin>();
   for (let i = 0; i < mints.length; i += 33) {
     const chunk = mints.slice(i, i + 33);
-    const addrs = chunk.map((m) => ({ m, curve: bondingCurveAddress(m), meta: metadataAddress(m) }));
+    const addrs: { m: string; curve: string; meta: string }[] = [];
+    for (const m of chunk) {
+      try { addrs.push({ m, curve: bondingCurveAddress(m), meta: metadataAddress(m) }); }
+      catch { out.set(m, { mint: m, curveAddress: "", mintRes: { ok: false, reason: "invalid mint address" }, curve: null, curveNote: "invalid mint address", name: null, symbol: null, readAt: null, slot: null }); }
+    }
+    if (!addrs.length) continue;
     try {
       const r = await rpc<{ context: { slot: number }; value: AcctB64[] }>("getMultipleAccounts", [
         addrs.flatMap((a) => [a.m, a.curve, a.meta]),
@@ -82,7 +89,7 @@ export async function fetchOnchainBatch(mints: string[]): Promise<Map<string, On
       addrs.forEach((a, j) => {
         const [mAcct, cAcct, mdAcct] = [r.value[j * 3] ?? null, r.value[j * 3 + 1] ?? null, r.value[j * 3 + 2] ?? null];
         const pm = parseMintAcct(mAcct);
-        const curve = cAcct && Array.isArray(cAcct.data) ? decodeBondingCurve(cAcct.data[0]) : null;
+        const curve = cAcct?.owner === PUMP_PROGRAM_ID && Array.isArray(cAcct.data) ? decodeBondingCurve(cAcct.data[0]) : null;
         const md = !pm.name && mdAcct && Array.isArray(mdAcct.data) ? decodeMetaplexNameSymbol(mdAcct.data[0]) : null;
         out.set(a.m, {
           mint: a.m,
@@ -113,10 +120,11 @@ export async function fetchSolUsd(): Promise<Sourced<number>> {
     ["coingecko", "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", (j) => j?.solana?.usd],
   ];
   const errs: string[] = [];
+  const requestedAt = new Date().toISOString();
   for (const [name, url, pick] of sources) {
     try {
-      const v = Number(pick(await getJsonPolite<unknown>(url, { retries: 1, cacheTtlMs: 60_000 })));
-      if (Number.isFinite(v) && v > 0) return { value: v, source: `${name} SOL/USD`, at: new Date().toISOString() };
+      const v = Number(pick(await getJsonPolite<unknown>(url, { retries: 1, cacheTtlMs: 0 })));
+      if (Number.isFinite(v) && v > 0) return { value: v, source: `${name} SOL/USD`, at: requestedAt };
       errs.push(`${name}: no price`);
     } catch (e) {
       errs.push(`${name}: ${e instanceof Error ? e.message.slice(0, 60) : String(e)}`);
@@ -130,18 +138,23 @@ export type Activity = { summary: ActivitySummary; trades: ParsedTrade[]; oldest
 /** 1 credit signature list + up to TRADE_SAMPLE transaction reads. Throws on failure (caller marks UNANALYZED). */
 export async function fetchActivity(mint: string, curve: string, nowSec = Math.floor(Date.now() / 1000)): Promise<Activity> {
   const sigs = await rpc<{ signature: string; blockTime?: number | null; err?: unknown }[]>("getSignaturesForAddress", [curve, { limit: SIG_LIST_LIMIT, commitment: "confirmed" }]);
-  const recent = sigs.filter((s) => !s.err && typeof s.blockTime === "number" && nowSec - s.blockTime <= ACTIVITY_WINDOW_SEC).slice(0, TRADE_SAMPLE);
+  const recent = sigs.filter((s) => !s.err && typeof s.blockTime === "number" && nowSec >= s.blockTime && nowSec - s.blockTime <= ACTIVITY_WINDOW_SEC).slice(0, TRADE_SAMPLE);
   const trades: ParsedTrade[] = [];
   const parsed = new Set<string>();
   for (const s of recent) {
     const tx = await rpc<Parameters<typeof parseCurveTrade>[0]>("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
+    if (!tx || !tx.meta || tx.meta.err || typeof tx.blockTime !== "number") throw new Error("Trade transaction unavailable or invalid");
     parsed.add(s.signature);
     const t = parseCurveTrade(tx, s.signature, mint, curve);
     if (t) trades.push(t);
   }
   // Non-trade txs that were read still count as "covered" for sample completeness.
   const covered = sigs.filter((s) => parsed.has(s.signature));
-  const summary = summarizeActivity(sigs, [...trades, ...covered.filter((c) => !trades.some((t) => t.signature === c.signature)).map((c) => ({ signature: c.signature, time: -1e12, wallet: "", side: "buy" as const, sol: 0, tokens: 0 }))], nowSec, ACTIVITY_WINDOW_SEC);
+  const summary = summarizeActivity(sigs, trades, nowSec, ACTIVITY_WINDOW_SEC);
+  const successful = sigs.filter((s) => !s.err && typeof s.blockTime === "number" && nowSec >= s.blockTime && nowSec - s.blockTime <= ACTIVITY_WINDOW_SEC);
+  const timesInList = sigs.flatMap((s) => typeof s.blockTime === "number" ? [s.blockTime] : []);
+  const coversWindow = sigs.length < SIG_LIST_LIMIT || timesInList.some((t) => t < nowSec - ACTIVITY_WINDOW_SEC);
+  summary.sampleComplete = coversWindow && successful.every((s) => covered.some((c) => c.signature === s.signature));
   const times = sigs.map((s) => s.blockTime).filter((t): t is number => typeof t === "number");
   return { summary, trades, oldestSigTime: times.length ? Math.min(...times) : null, listComplete: sigs.length < SIG_LIST_LIMIT };
 }
@@ -196,7 +209,7 @@ export function buildMarketData(oc: OnchainCoin | undefined, dex: DexPair | unde
   if (dex && Number.isFinite(dp) && dp > 0 && dexAt) {
     return {
       source: "dexscreener",
-      priceSol: solUsd.value ? { value: dp / solUsd.value, source: `dexscreener ÷ ${solUsd.source} (estimate)`, at: dexAt } : na("dexscreener", "SOL/USD unavailable"),
+      priceSol: solUsd.value ? { value: dp / solUsd.value, source: `dexscreener ÷ ${solUsd.source} (estimate)`, at: solUsd.at && solUsd.at < dexAt ? solUsd.at : dexAt } : na("dexscreener", "SOL/USD unavailable"),
       priceUsd: { value: dp, source: "dexscreener (backup)", at: dexAt },
       solUsd,
       marketCapUsd: dex.marketCap ?? dex.fdv ? { value: (dex.marketCap ?? dex.fdv) as number, source: "dexscreener (backup)", at: dexAt } : na("dexscreener", "not reported"),
@@ -234,14 +247,61 @@ export function toPairLike(mint: string, oc: OnchainCoin | undefined, dex: DexPa
   const tx = a ? { buys: a.buys, sells: a.sells } : undefined;
   return {
     dexId: oc?.curve ? (oc.curve.complete ? "pumpswap" : "pumpfun") : (dex?.dexId ?? "pumpfun"),
-    pairAddress: oc?.curve ? oc.curveAddress : (dex?.pairAddress ?? oc?.curveAddress ?? ""),
+    pairAddress: oc?.curve && !oc.curve.complete ? oc.curveAddress : (dex?.pairAddress ?? oc?.curveAddress ?? ""),
     ...(md.priceUsd.value !== null ? { priceUsd: String(md.priceUsd.value) } : {}),
     baseToken: { address: mint, name: oc?.name ?? dex?.baseToken.name ?? "", symbol: oc?.symbol ?? dex?.baseToken.symbol ?? "" },
-    ...(tx ? { txns: { m5: tx, h1: tx } } : {}),
-    ...(volUsd !== undefined ? { volume: { m5: volUsd, h1: volUsd } } : {}),
+    ...(tx ? { txns: { m5: tx } } : {}),
+    ...(volUsd !== undefined ? { volume: { m5: volUsd } } : {}),
     ...(md.marketCapUsd.value !== null ? { marketCap: md.marketCapUsd.value } : {}),
     ...(md.liquidityUsd.value !== null ? { liquidity: { usd: md.liquidityUsd.value } } : {}),
     ...(md.launchedAt.value ? { pairCreatedAt: Date.parse(md.launchedAt.value) } : {}),
     ...(dex?.info ? { info: dex.info } : {}),
   };
+}
+
+/** Read activity independently of price; explicit indexed backup on RPC failure. */
+export async function attachActivity(mint: string, oc: OnchainCoin | undefined, dex: DexPair | undefined, dexAt: string | null, md: MarketData): Promise<MarketData> {
+  try {
+    if (!oc?.curve || oc.curve.complete) throw new Error("Active bonding curve unavailable");
+    const a = await fetchActivity(mint, oc.curveAddress);
+    md.activity = { ...a.summary, source: "helius curve transactions (SOL movement; sampled)", at: new Date().toISOString() };
+  } catch (e) {
+    md.activityError = e instanceof Error ? e.message : "Activity lookup failed";
+    const tx = dex?.txns?.["m5"];
+    if (tx && dexAt && Number.isFinite(tx.buys) && Number.isFinite(tx.sells)) {
+      md.activity = { windowSec: 300, txCount: tx.buys + tx.sells, failedTxCount: 0, sampled: 0, sampleComplete: false,
+        buys: tx.buys, sells: tx.sells, uniqueBuyers: 0, uniqueSellers: 0, buySol: 0, sellSol: 0,
+        lastTradeAt: null, firstSampleAt: null, source: "dexscreener aggregate backup (unique wallets/SOL unavailable)", at: dexAt };
+      md.missing.push("Unique buyers, sellers and SOL flow unavailable in indexed backup");
+    }
+  }
+  if (!md.activity) md.missing.push(`Trade activity: ${md.activityError ?? "unavailable"}`);
+  return md;
+}
+
+/** Outcome price-only batch: no market/wallet analysis or transaction reads. */
+export async function fetchOutcomePrices(mints: string[]): Promise<Map<string, { point: MarketPoint | null; reason: string }>> {
+  const out = new Map<string, { point: MarketPoint | null; reason: string }>();
+  const sol = await fetchSolUsd();
+  for (let i = 0; i < mints.length; i += 100) {
+    const chunk = mints.slice(i, i + 100);
+    try {
+      const r = await rpc<{ value: AcctB64[] }>("getMultipleAccounts", [chunk.map(bondingCurveAddress), { encoding: "base64", commitment: "confirmed" }]);
+      chunk.forEach((mint, j) => {
+        const acct = r.value[j];
+        const c = acct?.owner === PUMP_PROGRAM_ID && Array.isArray(acct.data) ? decodeBondingCurve(acct.data[0]) : null;
+        if (!c || c.complete || !sol.value || !sol.at || Date.now() - Date.parse(sol.at) > 120_000) {
+          out.set(mint, { point: null, reason: c?.complete ? "Graduated curve; indexed price required" : "Curve or SOL/USD price unavailable" });
+          return;
+        }
+        const priceUsd = curvePriceSol(c) * sol.value;
+        out.set(mint, { point: { priceUsd, liquidityUsd: Number(c.realSolReserves) / LAMPORTS_PER_SOL * sol.value,
+          marketCapUsd: priceUsd * Number(c.tokenTotalSupply) / 1e6, volumeH1Usd: null, volumeH24Usd: null },
+          reason: `Helius curve × ${sol.source} (USD estimate); observed now, not historical` });
+      });
+    } catch (e) {
+      for (const mint of chunk) out.set(mint, { point: null, reason: e instanceof Error ? e.message : "Outcome price unavailable" });
+    }
+  }
+  return out;
 }

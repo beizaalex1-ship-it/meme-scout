@@ -8,7 +8,7 @@ const upsert = vi.fn(async () => ({}));
 vi.mock("@/integrations/supabase/client.server", () => {
   const q = (data: unknown) => {
     const o: Record<string, unknown> = {};
-    for (const k of ["select", "eq", "gte", "limit", "in"]) o[k] = () => o;
+    for (const k of ["select", "eq", "gte", "limit", "in", "order", "range"]) o[k] = () => o;
     o["single"] = async () => ({ data });
     o["then"] = (r: (v: unknown) => unknown) => r({ data: Array.isArray(data) ? data : [] });
     return o;
