@@ -306,7 +306,7 @@ function TokenRow({ t }: { t: Token }) {
   const r = JSON.parse(t.reports) as Record<string, Record<string, unknown>>;
   return (
     <article className="rounded-md border border-border bg-card">
-      <Button onClick={() => setOpen(!open)} className="flex w-full items-center gap-3 p-4 text-left">
+      <Button variant="ghost" onClick={() => setOpen(!open)} className="flex h-auto w-full flex-wrap justify-start gap-3 p-4 text-left">
         <span className={`rounded px-2 py-0.5 font-mono text-xs uppercase ${statusStyle[t.status] ?? ""}`}>{t.status}</span>
         <span className="font-semibold">{t.name ?? "Unknown"}</span>
         <span className="font-mono text-sm text-muted-foreground">${t.symbol}</span>

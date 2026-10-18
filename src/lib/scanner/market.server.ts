@@ -243,7 +243,7 @@ export function buildMarketData(oc: OnchainCoin | undefined, dex: DexPair | unde
 export function toPairLike(mint: string, oc: OnchainCoin | undefined, dex: DexPair | undefined, md: MarketData): DexPair {
   const a = md.activity;
   const solUsd = md.solUsd.value;
-  const volUsd = a && solUsd ? (a.buySol + a.sellSol) * solUsd : undefined;
+  const volUsd = a && solUsd && a.buySol !== null && a.sellSol !== null ? (a.buySol + a.sellSol) * solUsd : undefined;
   const tx = a ? { buys: a.buys, sells: a.sells } : undefined;
   return {
     dexId: oc?.curve ? (oc.curve.complete ? "pumpswap" : "pumpfun") : (dex?.dexId ?? "pumpfun"),
@@ -269,8 +269,8 @@ export async function attachActivity(mint: string, oc: OnchainCoin | undefined, 
     md.activityError = e instanceof Error ? e.message : "Activity lookup failed";
     const tx = dex?.txns?.["m5"];
     if (tx && dexAt && Number.isFinite(tx.buys) && Number.isFinite(tx.sells)) {
-      md.activity = { windowSec: 300, txCount: tx.buys + tx.sells, failedTxCount: 0, sampled: 0, sampleComplete: false,
-        buys: tx.buys, sells: tx.sells, uniqueBuyers: 0, uniqueSellers: 0, buySol: 0, sellSol: 0,
+      md.activity = { windowSec: 300, txCount: tx.buys + tx.sells, failedTxCount: null, sampled: 0, sampleComplete: false,
+        buys: tx.buys, sells: tx.sells, uniqueBuyers: null, uniqueSellers: null, buySol: null, sellSol: null,
         lastTradeAt: null, firstSampleAt: null, source: "dexscreener aggregate backup (unique wallets/SOL unavailable)", at: dexAt };
       md.missing.push("Unique buyers, sellers and SOL flow unavailable in indexed backup");
     }

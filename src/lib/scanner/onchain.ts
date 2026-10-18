@@ -194,16 +194,16 @@ export type ActivitySummary = {
   windowSec: number;
   /** all successful transactions touching the curve in the window (from the signature list) */
   txCount: number;
-  failedTxCount: number;
+  failedTxCount: number | null;
   /** parsed sample */
   sampled: number;
   sampleComplete: boolean;
   buys: number;
   sells: number;
-  uniqueBuyers: number;
-  uniqueSellers: number;
-  buySol: number;
-  sellSol: number;
+  uniqueBuyers: number | null;
+  uniqueSellers: number | null;
+  buySol: number | null;
+  sellSol: number | null;
   lastTradeAt: number | null;
   firstSampleAt: number | null;
 };
@@ -255,6 +255,9 @@ export function marketReadiness(
     if (!Number.isFinite(at) || at > nowMs || nowMs - at > MAX_MARKET_AGE_SEC * 1000) return { analyzable: false, reason: `${label} stale (from ${f.at ?? "unknown time"})` };
   }
   if (!m.activity) return { analyzable: false, reason: `trade activity unavailable${m.activityError ? `: ${m.activityError}` : ""}` };
+  const activityAt = "at" in m.activity && typeof m.activity.at === "string" ? Date.parse(m.activity.at) : null;
+  if (activityAt !== null && (!Number.isFinite(activityAt) || activityAt > nowMs || nowMs - activityAt > MAX_MARKET_AGE_SEC * 1000))
+    return { analyzable: false, reason: "trade activity stale" };
   return { analyzable: true };
 }
 

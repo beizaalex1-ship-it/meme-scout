@@ -284,7 +284,8 @@ async function analyzeToken(mint: string, pair: DexPair, mintRes: MintResult, ma
     } catch (e) {
       if (e instanceof AiGatewayError && (e.status === 402 || e.status === 403 || e.status === 401)) {
         await db.from("scanner_state").update({ paused_reason: `AI unavailable [${e.status}]: ${e.message}` }).eq("id", 1);
-        await db.from("scanned_tokens").delete().eq("mint", mint); // retry after resume
+        await db.from("scanned_tokens").update({ status: "unanalyzed", score: null, alert_text: null,
+          verdict: "UNANALYZED — AI research unavailable", reports: { ...reports, approval: { approved: false, reasons: ["AI research unavailable"] } } }).eq("mint", mint);
         return "paused";
       }
       throw e;
