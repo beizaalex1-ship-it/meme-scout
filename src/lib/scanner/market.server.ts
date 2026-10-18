@@ -48,10 +48,13 @@ type ParsedMintInfo = {
 
 function parseMintAcct(a: AcctB64): { res: MintResult; name: string | null; symbol: string | null } {
   const info = a && !Array.isArray(a.data) ? (a.data.parsed?.info as ParsedMintInfo | undefined) : undefined;
-  if (!info || typeof info.decimals !== "number" || info.supply === undefined)
+  if (!info || typeof info.decimals !== "number" || typeof info.supply !== "string" || !Number.isFinite(Number(info.supply)) || Number(info.supply) <= 0
+    || !(info.mintAuthority === null || typeof info.mintAuthority === "string") || !(info.freezeAuthority === null || typeof info.freezeAuthority === "string"))
     return { res: { ok: false, reason: "mint account not found or not a parsed SPL mint" }, name: null, symbol: null };
   const ext = info.extensions ?? [];
   const fee = ext.find((e) => e.extension === "transferFeeConfig")?.state as { newerTransferFee?: { transferFeeBasisPoints?: number } } | undefined;
+  if (ext.some((e) => e.extension === "transferFeeConfig") && typeof fee?.newerTransferFee?.transferFeeBasisPoints !== "number")
+    return { res: { ok: false, reason: "transfer fee extension incompletely parsed" }, name: null, symbol: null };
   const md = ext.find((e) => e.extension === "tokenMetadata")?.state as { name?: string; symbol?: string } | undefined;
   return {
     res: {
@@ -243,7 +246,7 @@ export function buildMarketData(oc: OnchainCoin | undefined, dex: DexPair | unde
 export function toPairLike(mint: string, oc: OnchainCoin | undefined, dex: DexPair | undefined, md: MarketData): DexPair {
   const a = md.activity;
   const solUsd = md.solUsd.value;
-  const volUsd = a && solUsd ? (a.buySol + a.sellSol) * solUsd : undefined;
+  const volUsd = a && solUsd && a.buySol !== null && a.sellSol !== null ? (a.buySol + a.sellSol) * solUsd : undefined;
   const tx = a ? { buys: a.buys, sells: a.sells } : undefined;
   return {
     dexId: oc?.curve ? (oc.curve.complete ? "pumpswap" : "pumpfun") : (dex?.dexId ?? "pumpfun"),
@@ -269,8 +272,8 @@ export async function attachActivity(mint: string, oc: OnchainCoin | undefined, 
     md.activityError = e instanceof Error ? e.message : "Activity lookup failed";
     const tx = dex?.txns?.["m5"];
     if (tx && dexAt && Number.isFinite(tx.buys) && Number.isFinite(tx.sells)) {
-      md.activity = { windowSec: 300, txCount: tx.buys + tx.sells, failedTxCount: 0, sampled: 0, sampleComplete: false,
-        buys: tx.buys, sells: tx.sells, uniqueBuyers: 0, uniqueSellers: 0, buySol: 0, sellSol: 0,
+      md.activity = { windowSec: 300, txCount: tx.buys + tx.sells, failedTxCount: null, sampled: 0, sampleComplete: false,
+        buys: tx.buys, sells: tx.sells, uniqueBuyers: null, uniqueSellers: null, buySol: null, sellSol: null,
         lastTradeAt: null, firstSampleAt: null, source: "dexscreener aggregate backup (unique wallets/SOL unavailable)", at: dexAt };
       md.missing.push("Unique buyers, sellers and SOL flow unavailable in indexed backup");
     }

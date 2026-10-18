@@ -15,7 +15,8 @@
 - [x] Helius discovery fallback for GeckoTerminal failures
 - [x] Owner account + admin role
 - [x] 1. Recommendation audit (root causes shown to user)
-- [ ] 2. Finish live market-data integration, explicit unanalyzed dashboard results, cost estimate, concurrent budget guard and regression/live verification (approved; no publish)
+- [x] 2. Live market-data integration, explicit unanalyzed dashboard results, cost estimate, concurrent budget guard; real price/trade read verified, regression tests added (not published)
+- [ ] Full signed-in live scan/readback of new research — blocked by existing AI-credit pause; do not resume or publish without owner review
 - [ ] 3. Wallet-verification scoring + mandatory safety; Telegram approved-only
 - [ ] 4. Early-detection signals
 - [ ] Performance tracking 5/15/30/60 reliable (on-time checks, max gain/loss)
