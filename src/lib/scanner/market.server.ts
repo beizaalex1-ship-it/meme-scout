@@ -48,10 +48,13 @@ type ParsedMintInfo = {
 
 function parseMintAcct(a: AcctB64): { res: MintResult; name: string | null; symbol: string | null } {
   const info = a && !Array.isArray(a.data) ? (a.data.parsed?.info as ParsedMintInfo | undefined) : undefined;
-  if (!info || typeof info.decimals !== "number" || info.supply === undefined)
+  if (!info || typeof info.decimals !== "number" || typeof info.supply !== "string" || !Number.isFinite(Number(info.supply)) || Number(info.supply) <= 0
+    || !(info.mintAuthority === null || typeof info.mintAuthority === "string") || !(info.freezeAuthority === null || typeof info.freezeAuthority === "string"))
     return { res: { ok: false, reason: "mint account not found or not a parsed SPL mint" }, name: null, symbol: null };
   const ext = info.extensions ?? [];
   const fee = ext.find((e) => e.extension === "transferFeeConfig")?.state as { newerTransferFee?: { transferFeeBasisPoints?: number } } | undefined;
+  if (ext.some((e) => e.extension === "transferFeeConfig") && typeof fee?.newerTransferFee?.transferFeeBasisPoints !== "number")
+    return { res: { ok: false, reason: "transfer fee extension incompletely parsed" }, name: null, symbol: null };
   const md = ext.find((e) => e.extension === "tokenMetadata")?.state as { name?: string; symbol?: string } | undefined;
   return {
     res: {
