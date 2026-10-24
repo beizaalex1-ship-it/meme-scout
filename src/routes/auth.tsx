@@ -16,25 +16,42 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
 });
 
+const MAX_ATTEMPTS = 5;
+
 function AuthPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [attempts, setAttempts] = useState(0);
 
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
+    if (attempts >= MAX_ATTEMPTS) return setMsg("Too many login attempts. Please wait and try again.");
     setBusy(true);
     setMsg(null);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(false);
-    if (error) return setMsg("Sign-in failed. Check your email and password.");
+    if (error) {
+      const next = attempts + 1;
+      setAttempts(next);
+      return setMsg(
+        next >= MAX_ATTEMPTS
+          ? "Too many login attempts. Please wait and try again."
+          : "Sign-in failed. Check your email and password.",
+      );
+    }
+    setAttempts(0);
     navigate({ to: "/dashboard" });
   }
   async function forgot() {
     if (!email) return setMsg("Enter your email first.");
-    await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/reset-password` });
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/reset-password` });
+    if (error) {
+      console.error(error);
+      return setMsg("Unable to send password reset email.");
+    }
     setMsg("If that account exists, a reset link is on its way.");
   }
 
