@@ -1,8 +1,8 @@
-import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { NoObjectGeneratedError, Output, streamText } from "ai";
 import { z } from "zod";
 
-const MODEL = "openai/gpt-6-astra";
+const MODEL = process.env["AI_MODEL"] ?? "claude-sonnet-5-5";
 
 export const aiSchema = z.object({
   social: z.object({
@@ -40,15 +40,13 @@ Agent 6 — Opportunity Analyst: weigh upside (market-cap room to grow, momentum
 Agent 7 — Chief Research Agent: write 3 punchy bullets (market momentum, social sentiment, wallet health) and a one-line final verdict for a Telegram alert. Not financial advice tone; be factual and concise.`;
 
 export async function runAiAgents(evidence: unknown): Promise<AiReport> {
-  const apiKey = process.env["LOVABLE_API_KEY"];
-  if (!apiKey) throw new AiGatewayError(401, "LOVABLE_API_KEY is not configured");
+  const apiKey = process.env["ANTHROPIC_API_KEY"];
+  if (!apiKey) throw new AiGatewayError(401, "ANTHROPIC_API_KEY is not configured");
 
   let failStatus: number | null = null;
   let failBody = "";
-  const provider = createOpenAI({
-    baseURL: "https://ai.gateway.lovable.dev/v1",
+  const provider = createAnthropic({
     apiKey,
-    headers: { "Lovable-API-Key": apiKey, "X-Lovable-AIG-SDK": "vercel-ai-sdk" },
     fetch: async (input, init) => {
       const res = await fetch(input, init);
       if (!res.ok) {
@@ -60,18 +58,10 @@ export async function runAiAgents(evidence: unknown): Promise<AiReport> {
   });
 
   const result = streamText({
-    model: provider.responses(MODEL),
+    model: provider(MODEL),
     system: INSTRUCTIONS,
     prompt: `Evidence from agents 1, 2, 4 and 5:\n${JSON.stringify(evidence, null, 2)}`,
     output: Output.object({ schema: aiSchema }),
-    providerOptions: {
-      openai: {
-        forceReasoning: true,
-        reasoningEffort: "low",
-        store: false,
-        include: ["reasoning.encrypted_content"],
-      },
-    },
     onError: () => {},
   });
 
