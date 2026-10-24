@@ -99,8 +99,8 @@ function Dashboard() {
           <Button
             onClick={scan}
             disabled={scanning}
-            className="bg-background rounded-md border border-primary
-          >
+                        className="bg-background rounded-md border border-primary px-4 py-2 font-semibold text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
+            >
             {scanning ? "Scanning…" : "Scan now"}
           </Button>
           <Button
